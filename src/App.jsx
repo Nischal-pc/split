@@ -259,11 +259,13 @@ function ResetPassword({ rec, onDone }) {
 function HomeTab({ user, onOpen, onAccount }) {
   const [groups, setGroups] = useState(null)
   const [expenses, setExpenses] = useState([])
+  const [people, setPeople] = useState(null)
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
 
   async function load() {
     try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) }
     try { setExpenses(await db.listAllExpenses()) } catch { setExpenses([]) }
+    try { setPeople(await db.listPeople(user.id)) } catch { setPeople([]) }
   }
   useEffect(() => { load() }, [])
 
@@ -325,6 +327,23 @@ function HomeTab({ user, onOpen, onAccount }) {
         <button className="qbtn" onClick={() => setSheet('friend')}><Ic.userPlus /><span>Add friend</span></button>
         <button className="qbtn" onClick={() => setSheet('join')}><Ic.ticket /><span>Join group</span></button>
       </div>
+
+      {people && people.length > 0 && <>
+        <div className="eyebrow mt">Balances with people</div>
+        <div className="card list" aria-label="What each person owes you or you owe them, across all groups">
+          {people.map(p => (
+            <div className="row" key={p.user_id + p.cur}>
+              <div className="avatar" style={{ background: COLORS[[...p.user_id].reduce((h, c) => h + c.charCodeAt(0), 0) % COLORS.length] }}>{p.name.slice(0, 1).toUpperCase()}</div>
+              <div className="grow"><b className="truncate">{p.name}</b>
+                <div className="tiny muted truncate">{p.groups.length === 1 ? 'in ' : `across ${p.groups.length} groups · `}{p.groups.join(', ')}</div></div>
+              <div className="right">
+                <div className="tiny muted">{p.net > 0 ? 'owes you' : 'you owe'}</div>
+                <div className={'num ' + (p.net > 0 ? 'pos' : 'neg')}>{money(Math.abs(p.net), p.cur)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </>}
 
       {oneCur && expenses.length > 0 && <>
         <div className="eyebrow mt">Your spending</div>

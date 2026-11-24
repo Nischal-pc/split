@@ -105,3 +105,23 @@ export function filterExpenses(expenses, { q = '', cat = '', who = '' } = {}) {
     (!t || (e.description || '').toLowerCase().includes(t) || (e.notes || '').toLowerCase().includes(t)) &&
     (!cat || e.category === cat) && (!who || e.paid_by === who))
 }
+
+// Overall balance with each person across every group, per currency.
+// Uses each group's simplified "who owes who" so Home matches what the group screens show.
+// groups: [{ name, currency, members, expenses, splits, settlements }]
+// Returns [{ user_id, name, cur, net, groups }] — net > 0: they owe me; net < 0: I owe them. Zero balances dropped.
+export function peopleBalances(me, groups) {
+  const acc = {}
+  for (const g of groups) {
+    for (const s of simplify(computeNets(g.members, g.expenses, g.splits, g.settlements))) {
+      const other = s.from === me ? s.to : s.to === me ? s.from : null
+      if (!other) continue
+      const key = other + '|' + g.currency
+      const name = g.members.find(m => m.user_id === other)?.display_name || 'Someone'
+      const p = acc[key] ||= { user_id: other, name, cur: g.currency, net: 0, groups: [] }
+      p.net += s.to === me ? s.amount : -s.amount
+      if (!p.groups.includes(g.name)) p.groups.push(g.name)
+    }
+  }
+  return Object.values(acc).filter(p => p.net !== 0).sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+}

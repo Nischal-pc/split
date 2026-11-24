@@ -1,6 +1,6 @@
 // Run with: npm test  (plain Node, no test framework)
 import assert from 'node:assert'
-import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances } from './split.js'
 
 // equal split of 10.00 among 3 -> 3.34/3.33/3.33, remainder to payer
 let a = allocate(1000, [{ id: 'x', w: 1 }, { id: 'y', w: 1 }, { id: 'z', w: 1 }], 'x')
@@ -51,4 +51,16 @@ assert.equal(filterExpenses(ex, { q: 'pizza' }).length, 2)
 assert.equal(filterExpenses(ex, { q: 'pizza', cat: 'food' }).length, 1)
 assert.equal(filterExpenses(ex, { who: 'b' })[0].description, 'Uber')
 
-console.log('ok — all split/balance/receipt/recurring/filter checks passed')
+// overall balance per person across groups
+const M = (...ids) => ids.map(id => ({ user_id: id, display_name: id.toUpperCase() }))
+const g1 = { name: 'Roomies', currency: '$', members: M('me', 'sam'), expenses: [{ id: 'e1', paid_by: 'me', amount_cents: 8000 }],
+  splits: [{ expense_id: 'e1', member_id: 'me', owed_cents: 4000 }, { expense_id: 'e1', member_id: 'sam', owed_cents: 4000 }], settlements: [] }
+const g2 = { name: 'Trip', currency: '$', members: M('me', 'sam', 'maya'), expenses: [{ id: 'e2', paid_by: 'sam', amount_cents: 3000 }],
+  splits: ['me', 'sam', 'maya'].map(id => ({ expense_id: 'e2', member_id: id, owed_cents: 1000 })), settlements: [] }
+const g3 = { name: 'Euro', currency: '€', members: M('me', 'sam'), expenses: [{ id: 'e3', paid_by: 'sam', amount_cents: 500 }],
+  splits: [{ expense_id: 'e3', member_id: 'me', owed_cents: 500 }], settlements: [{ from_member: 'me', to_member: 'sam', amount_cents: 500 }] }
+const pb = peopleBalances('me', [g1, g2, g3])
+assert.equal(pb.length, 1) // € group is settled, maya owes sam not me
+assert.deepEqual([pb[0].user_id, pb[0].net, pb[0].cur, pb[0].groups], ['sam', 3000, '$', ['Roomies', 'Trip']]) // 40 owed - 10 owing
+
+console.log('ok — all split/balance/receipt/recurring/filter/people checks passed')

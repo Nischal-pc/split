@@ -1,7 +1,7 @@
 // All backend access lives here so the UI never touches Appwrite directly.
 import { ID, Query, Permission, Role, OAuthProvider } from 'appwrite'
 import { client, account, databases, teams, functions, DB, C } from './appwrite.js'
-import { dueDates, nextDate } from './split.js'
+import { dueDates, nextDate, peopleBalances } from './split.js'
 
 const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
 
@@ -70,6 +70,27 @@ export async function listGroups(userId) {
   return groups.map(g => ({ ...g, myNet: net[g.id] || 0 }))
 }
 // kind: undefined for a normal group, 'friend' for a 1:1 friend (non-group expenses).
+// Overall balance with each person across all my groups (see peopleBalances).
+// shortcut: re-reads the same collections as listGroups and one membership list per group; fine for personal use, batch with listGroups if Home gets slow.
+export async function listPeople(userId) {
+  const t = await teams.list()
+  const ids = t.teams.map(x => x.$id)
+  if (!ids.length) return []
+  const [gr, e, s, st] = await Promise.all([
+    databases.listDocuments(DB, C.groups, [Query.equal('team_id', ids), Query.limit(100)]),
+    databases.listDocuments(DB, C.expenses, [Query.limit(2000)]),
+    databases.listDocuments(DB, C.splits, [Query.limit(5000)]),
+    databases.listDocuments(DB, C.settlements, [Query.limit(2000)]),
+  ])
+  const groups = await Promise.all(gr.documents.map(async g => ({
+    name: g.name, currency: g.currency,
+    members: await listMembers(g.team_id).catch(() => []),
+    expenses: e.documents.filter(x => x.group_id === g.$id).map(norm),
+    splits: s.documents.filter(x => x.group_id === g.$id),
+    settlements: st.documents.filter(x => x.group_id === g.$id),
+  })))
+  return peopleBalances(userId, groups)
+}
 export async function createGroup(name, currency, userId, kind) {
   const team = await teams.create(ID.unique(), name)
   const doc = await databases.createDocument(DB, C.groups, ID.unique(),
