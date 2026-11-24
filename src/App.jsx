@@ -60,6 +60,13 @@ function quickOptions({ name, n, amt, cur, group }) {
     ['custom', 'Something else', 'Different amounts, percentages, shares or payer'],
   ]
 }
+// Time-of-day greeting for the Home header.
+function greeting(h = new Date().getHours()) {
+  if (h >= 5 && h < 12) return { text: 'Good morning', emoji: '☀️' }
+  if (h >= 12 && h < 17) return { text: 'Good afternoon', emoji: '🌤️' }
+  if (h >= 17 && h < 21) return { text: 'Good evening', emoji: '🌆' }
+  return { text: 'Good night', emoji: '🌙' }
+}
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
 
@@ -82,24 +89,8 @@ export default function App() {
   if (user === undefined) return <div className="center">Loading…</div>
   if (recovery) return <ResetPassword rec={recovery} onDone={() => setRecovery(null)} />
   if (!user) return <Auth onAuthed={onAuthed} />
-  if (groupId) return <><Header /><GroupView groupId={groupId} user={user} onBack={() => setGroupId(null)} /></>
+  if (groupId) return <GroupView groupId={groupId} user={user} onBack={() => setGroupId(null)} />
   return <Shell user={user} onOpen={setGroupId} onSignOut={signOut} />
-}
-
-function Header() {
-  const toggleTheme = () => {
-    const cur = document.documentElement.getAttribute('data-theme')
-    const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches
-    document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark')
-  }
-  return (
-    <header>
-      <div className="bar">
-        <h1><span className="logo">S</span>SplitIt</h1>
-        <button className="icon-btn" title="Toggle theme" aria-label="Toggle theme" onClick={toggleTheme}><Ic.moon /></button>
-      </div>
-    </header>
-  )
 }
 
 /* ---------------- Shell with bottom-tab navigation ---------------- */
@@ -107,8 +98,7 @@ function Shell({ user, onOpen, onSignOut }) {
   const [tab, setTab] = useState('home')
   return (
     <>
-      <Header />
-      {tab === 'home' && <HomeTab user={user} onOpen={onOpen} />}
+      {tab === 'home' && <HomeTab user={user} onOpen={onOpen} onAccount={() => setTab('account')} />}
       {tab === 'activity' && <GlobalActivity user={user} />}
       {tab === 'account' && <AccountTab user={user} onSignOut={onSignOut} />}
       <nav className="tabbar">
@@ -266,7 +256,7 @@ function ResetPassword({ rec, onDone }) {
 }
 
 /* ---------------- Home ---------------- */
-function HomeTab({ user, onOpen }) {
+function HomeTab({ user, onOpen, onAccount }) {
   const [groups, setGroups] = useState(null)
   const [expenses, setExpenses] = useState([])
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
@@ -291,14 +281,18 @@ function HomeTab({ user, onOpen }) {
     <main className="wrap">
       <section className="dash" aria-label="Your balances">
         <div className="dash-hello">
-          <div className="acct-avatar sm" aria-hidden="true">{first.slice(0, 1).toUpperCase()}</div>
-          <div><div className="greet">Hi {first}</div><div className="dash-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
+          <div className="grow">
+            <h1 className="hello">{greeting().text}, {first} <span className="wave" aria-hidden="true">{greeting().emoji}</span></h1>
+            <div className="dash-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
+          </div>
+          <button className="me-btn" onClick={onAccount} aria-label="Your account" title="Your account">{first.slice(0, 1).toUpperCase()}</button>
         </div>
         {groups === null ? <div className="dash-total muted">Loading…</div>
-          : !gs.length ? <>
-            <div className="dash-total">Welcome 👋</div>
-            <p className="dash-sub">Start a group or add a friend to split your first bill.</p>
-          </>
+          : !gs.length ? <div className="dash-card dash-empty">
+            <div className="dash-label">Total balance</div>
+            <div className="dash-total num muted">$0.00</div>
+            <p className="dash-sub">Nothing to settle yet. Start a group or add a friend to split your first bill.</p>
+          </div>
           : !oneCur ? <>
             <div className="dash-total">Your balances</div>
             <p className="dash-sub">You use more than one currency, so each balance is shown with its group below.</p>

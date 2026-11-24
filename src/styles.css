@@ -59,9 +59,6 @@ svg{display:block}
 
 .wrap{max-width:520px;margin:0 auto;padding:0 max(20px,env(safe-area-inset-left)) 128px max(20px,env(safe-area-inset-right))}
 
-header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:saturate(1.2) blur(14px)}
-.bar{max-width:520px;margin:0 auto;display:flex;align-items:center;gap:8px;padding:13px max(20px,env(safe-area-inset-left))}
-.bar h1{font-size:1.25rem;flex:1;display:flex;align-items:center;gap:9px;font-weight:600}
 .logo{width:28px;height:28px;border-radius:9px;background:var(--btn-bg);color:var(--btn-fg);display:grid;place-items:center;font-weight:700;font-family:var(--disp)}
 .icon-btn{width:40px;height:40px;border-radius:999px;border:none;background:var(--surface-2);display:grid;place-items:center;flex:none;transition:background .15s,transform .1s}
 .icon-btn:hover{background:var(--line)}
@@ -348,3 +345,16 @@ details.more summary:hover{color:var(--fg)}
 .qtext small{font-size:.8rem;color:var(--muted)}
 .qopt[aria-checked="true"] .qtext small{color:var(--accent)}
 .qdivider{height:1px;background:var(--line);margin:16px 0}
+
+/* home header: time-of-day greeting + account button (no logo bar, like Splitwise) */
+.wrap{padding-top:env(safe-area-inset-top)}
+.dash{padding-top:20px}
+.dash-hello{display:flex;align-items:center;gap:14px;margin-bottom:20px}
+.hello{font-family:var(--disp);font-size:1.55rem;font-weight:600;letter-spacing:-.025em;line-height:1.15;margin:0}
+.wave{display:inline-block;transform-origin:70% 70%;animation:wave 1.1s cubic-bezier(.16,1,.3,1) .25s 1 both}
+@keyframes wave{0%{transform:rotate(0) scale(.6);opacity:0}40%{transform:rotate(14deg) scale(1.1);opacity:1}70%{transform:rotate(-6deg)}100%{transform:rotate(0) scale(1)}}
+.dash-hello .dash-date{margin-top:3px;font-size:.84rem;color:var(--muted)}
+.me-btn{width:44px;height:44px;flex:none;border:none;border-radius:999px;background:var(--accent);color:var(--surface);
+  font-family:var(--disp);font-weight:700;font-size:1.05rem;box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 30%,transparent);transition:transform .12s}
+.me-btn:active{transform:scale(.94)}
+.dash-empty{padding-bottom:4px}
