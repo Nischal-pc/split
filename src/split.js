@@ -161,3 +161,15 @@ export function parseReceiptItems(text) {
   }
   return out.slice(0, 30)
 }
+
+// Currencies the exchange-rate service supports (ECB reference rates).
+export const CURRENCIES = ['CAD', 'USD', 'EUR', 'GBP', 'INR', 'AUD', 'NZD', 'JPY', 'CNY', 'HKD', 'SGD', 'KRW', 'THB', 'PHP', 'IDR', 'MYR',
+  'MXN', 'BRL', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'ISK', 'TRY', 'ILS', 'ZAR', 'RON']
+// Best guess at a group's currency code from its symbol; '$' defaults to CAD (app runs in Canada). The person can change it.
+export function guessCode(symbol) {
+  const s = (symbol || '').trim().toUpperCase()
+  if (CURRENCIES.includes(s)) return s
+  return { '$': 'CAD', 'C$': 'CAD', 'US$': 'USD', '€': 'EUR', '£': 'GBP', '₹': 'INR', 'RS': 'INR', '¥': 'JPY', 'A$': 'AUD', '₩': 'KRW', '฿': 'THB', '₱': 'PHP', 'R$': 'BRL', '₺': 'TRY', '₪': 'ILS', 'ZŁ': 'PLN', 'CHF': 'CHF' }[s] || 'CAD'
+}
+// Convert cents at a rate (e.g. 1.5707), rounded to the nearest cent.
+export const convertCents = (cents, rate) => Math.round(cents * rate)

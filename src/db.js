@@ -318,3 +318,14 @@ export async function shareText(title, text, url) {
   await navigator.clipboard.writeText(url ? `${text} ${url}` : text)
   return 'copied'
 }
+
+/* ---------- exchange rates ---------- */
+// Today's rate from -> to via Frankfurter (free, no key; only the two currency codes are sent).
+export async function fetchRate(from, to) {
+  if (from === to) return 1
+  const r = await fetch(`https://api.frankfurter.dev/v1/latest?base=${from}&symbols=${to}`)
+  if (!r.ok) throw new Error('Rate service unavailable')
+  const rate = (await r.json()).rates?.[to]
+  if (!rate) throw new Error('No rate for ' + from)
+  return rate
+}

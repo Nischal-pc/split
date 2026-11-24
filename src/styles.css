@@ -409,3 +409,14 @@ details.more summary:hover{color:var(--fg)}
 .item-sum{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.86rem;color:var(--muted)}
 .item-sum b{color:var(--fg);font-weight:600}
 .splitbox .seg button{padding:10px 2px;font-size:.82rem}
+
+/* paid in another currency */
+.fxlink{display:block;margin:-8px 0 16px;font-size:.86rem}
+.fxbox{background:var(--surface);border-radius:var(--r-sm);box-shadow:var(--sh-1);padding:14px;margin:-6px 0 16px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.fxrow{display:flex;gap:8px;width:100%}
+.fxrow .inp:first-child{flex:1;min-width:0;font-weight:600}
+.fxsel{width:96px;flex:none}
+.fxrate{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:.84rem;color:var(--muted)}
+.fxrate input{width:84px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;background:var(--bg);text-align:right;font-weight:600}
+.fxrate input:focus{outline:none;border-color:var(--accent)}
+.fxbox .linkbtn{font-size:.82rem}

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -533,6 +533,7 @@ function GroupView({ groupId, user, onBack }) {
     setUndo(null)
     const extra = {}
     if (e.notes) extra.notes = e.notes
+    if (e.orig_cur) { extra.orig_amount = e.orig_amount; extra.orig_cur = e.orig_cur }
     if (e.repeat) { extra.repeat = e.repeat; extra.next_on = e.next_on }
     try {
       await db.addExpense(group, { description: e.description, amount_cents: e.amount_cents, paid_by: e.paid_by, category: e.category, spent_on: e.spent_on,
@@ -819,7 +820,7 @@ function ExpenseList({ members, expenses, splits, cur, me, onOpen }) {
           <button className="row rowbtn" key={e.id} onClick={() => onOpen(e)}>
             <div className="badge">{CATS[e.category] || '🧾'}</div>
             <div className="grow"><b className="truncate">{e.description}{e.repeat && <span className="faint tiny" title={'Repeats ' + e.repeat}> 🔁</span>}</b>
-              <div className="muted tiny">{nameOf(members, e.paid_by)} paid {money(e.amount_cents, cur)}{e.spent_on ? ' · ' + fmtDate(e.spent_on) : ''}</div></div>
+              <div className="muted tiny">{nameOf(members, e.paid_by)} paid {money(e.amount_cents, cur)}{e.orig_cur ? ` (${money(e.orig_amount, e.orig_cur + ' ')})` : ''}{e.spent_on ? ' · ' + fmtDate(e.spent_on) : ''}</div></div>
             <div className="right">
               {iPaid
                 ? <><div className="tiny muted">you lent</div><div className="num pos">{money(lent, cur)}</div></>
@@ -852,6 +853,28 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const [out, setOut] = useState(() => edit && editSplits?.length ? members.map(m => m.user_id).filter(id => !editSplits.some(s => s.member_id === id)) : def?.out || [])
   // Raw text per person for the active mode: cents-as-text for exact, else a number (percent / shares).
   const [items, setItems] = useState([]) // itemized: [{ key, name, price, people }]
+  // Paid in another currency: { cur, to, amount, rate, loading, err, keep }. 'to' is the group's ISO code, remembered per group.
+  const groupCode = () => localStorage.getItem('splitit.code.' + group.id) || guessCode(group.currency)
+  const [fx, setFx] = useState(() => edit?.orig_cur && edit.orig_amount
+    ? { cur: edit.orig_cur, to: groupCode(), amount: (edit.orig_amount / 100).toFixed(2), rate: String(+(edit.amount_cents / edit.orig_amount).toFixed(6)), keep: true }
+    : null)
+  useEffect(() => { // fetch today's rate when the currencies change (not for a saved expense being edited)
+    if (!fx) return
+    if (fx.keep) { setFx(f => ({ ...f, keep: false })); return }
+    localStorage.setItem('splitit.code.' + group.id, fx.to)
+    let live = true
+    setFx(f => ({ ...f, loading: true, err: '' }))
+    db.fetchRate(fx.cur, fx.to)
+      .then(r => live && setFx(f => ({ ...f, rate: String(r), loading: false })))
+      .catch(() => live && setFx(f => ({ ...f, loading: false, err: 'Couldn’t get today’s rate — type it in' })))
+    return () => { live = false }
+  }, [fx?.cur, fx?.to])
+  useEffect(() => { // keep the total in the group's currency in step
+    if (!fx) return
+    const c = toCents(fx.amount), r = parseFloat(fx.rate)
+    if (c > 0 && r > 0) setAmount((convertCents(c, r) / 100).toFixed(2))
+  }, [fx?.amount, fx?.rate])
+  const openFx = () => { const to = groupCode(); setFx({ cur: to === 'EUR' ? 'USD' : 'EUR', to, amount: '', rate: '' }) }
   const [scanned, setScanned] = useState([]) // items read from a receipt photo
   const [txt, setTxt] = useState(() => def?.txt || Object.fromEntries((edit && editSplits || []).map(s => [s.member_id, (s.owed_cents / 100).toFixed(2)])))
   const [err, setErr] = useState('')
@@ -945,6 +968,8 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     // only send optional fields that are set (or being cleared) so old backends keep working
     const extra = {}
     if (notes.trim() || edit?.notes) extra.notes = notes.trim()
+    if (fx && toCents(fx.amount) > 0) { extra.orig_amount = toCents(fx.amount); extra.orig_cur = fx.cur }
+    else if (edit?.orig_cur) { extra.orig_amount = null; extra.orig_cur = '' }
     if (repeat !== 'none') {
       extra.repeat = repeat
       if (!edit || edit.repeat !== repeat || !edit.next_on) extra.next_on = nextDate(date, repeat)
@@ -981,6 +1006,23 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
       <label className="fld"><span>Total</span>
         <div className="amt-field"><span className="amt-cur" aria-hidden="true">{cur}</span>
           <input className="inp amt-inp num" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></div></label>
+      {!fx ? <button type="button" className="linkbtn fxlink" onClick={openFx}>Paid in another currency?</button>
+        : <div className="fxbox">
+          <div className="fxrow">
+            <input className="inp num" inputMode="decimal" value={fx.amount} placeholder="0.00" aria-label={`Amount in ${fx.cur}`} autoFocus
+              onChange={e => setFx(f => ({ ...f, amount: e.target.value }))} />
+            <select className="inp fxsel" aria-label="Currency you paid in" value={fx.cur} onChange={e => setFx(f => ({ ...f, cur: e.target.value }))}>
+              {CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+          </div>
+          <div className="fxrate">
+            <span>1 {fx.cur} =</span>
+            <input className="num" inputMode="decimal" value={fx.rate} aria-label="Exchange rate" onChange={e => setFx(f => ({ ...f, rate: e.target.value }))} />
+            <select className="chipsel sm" aria-label="This group's currency" value={fx.to} onChange={e => setFx(f => ({ ...f, to: e.target.value }))}>
+              {CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+            <span className="faint">{fx.loading ? 'getting today’s rate…' : fx.err || 'today’s rate · you can edit it'}</span>
+          </div>
+          <button type="button" className="linkbtn" onClick={() => setFx(null)}>Paid in {cur} after all</button>
+        </div>}
 
       <section className="splitbox" aria-label="How to split">
         {others.length > 0 && <>
@@ -1341,6 +1383,7 @@ function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit,
         <div>
           <div className="detail-amt num">{money(expense.amount_cents, cur)}</div>
           <div className="muted tiny">{nameOf(members, expense.paid_by)} paid{expense.spent_on ? ' · ' + fmtDate(expense.spent_on) : ''}</div>
+          {expense.orig_cur && <div className="tiny faint">Paid {money(expense.orig_amount, expense.orig_cur + ' ')} · 1 {expense.orig_cur} ≈ {+(expense.amount_cents / expense.orig_amount).toFixed(4)}</div>}
           {expense.repeat && <div className="tiny faint">🔁 Repeats {expense.repeat}{expense.next_on ? ` · next ${fmtDate(expense.next_on)}` : ''}</div>}
         </div>
       </div>

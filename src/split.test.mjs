@@ -1,6 +1,6 @@
 // Run with: npm test  (plain Node, no test framework)
 import assert from 'node:assert'
-import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents } from './split.js'
 
 // equal split of 10.00 among 3 -> 3.34/3.33/3.33, remainder to payer
 let a = allocate(1000, [{ id: 'x', w: 1 }, { id: 'y', w: 1 }, { id: 'z', w: 1 }], 'x')
@@ -74,4 +74,9 @@ assert.equal(itemSplit(1000, [{ cents: 500, people: [] }], 'a').ok, false) // no
 const items = parseReceiptItems(["JOE'S DINER", '2 Burger 14.50', 'Fries 4.25', 'Subtotal 18.75', 'HST 2.44', 'TOTAL 21.19', 'VISA 21.19'].join('\n'))
 assert.deepEqual(items, [{ name: 'Burger', cents: 1450 }, { name: 'Fries', cents: 425 }])
 
-console.log('ok — all split/balance/receipt/recurring/filter/people/item checks passed')
+// currency
+assert.equal(guessCode('€'), 'EUR'); assert.equal(guessCode('$'), 'CAD'); assert.equal(guessCode('usd'), 'USD'); assert.equal(guessCode('??'), 'CAD')
+assert.equal(convertCents(5000, 1.5707), 7854) // €50 -> $78.54 (78.535 rounds up)
+assert.equal(convertCents(1, 0.004), 0)
+
+console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency checks passed')
