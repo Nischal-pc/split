@@ -322,3 +322,29 @@ details.more summary::-webkit-details-marker{display:none}
 details.more summary::before{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .2s}
 details.more[open] summary::before{transform:rotate(45deg)}
 details.more summary:hover{color:var(--fg)}
+
+/* home: greeting row + one balance card */
+.dash-hello{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.acct-avatar.sm{width:42px;height:42px;font-size:1.05rem;margin:0;color:#fff}
+.dash-hello .greet{margin:0;color:var(--fg);font-weight:600;font-size:1.08rem}
+.dash-date{font-size:.8rem;color:var(--faint)}
+.dash-card{background:var(--surface);border-radius:var(--r);box-shadow:var(--sh-2);padding:22px 0 0;overflow:hidden}
+.dash-card>.dash-label,.dash-card>.dash-total,.dash-card>.dash-sub{padding:0 22px}
+.dash-card .dash-total{font-size:2.5rem}
+.dash-card .dash-sub{margin:8px 0 18px}
+.dash-card .dash-split{background:none;box-shadow:none;border-radius:0;border-top:1px solid var(--line)}
+
+/* add expense: quick split choices */
+.qhead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;font-weight:600}
+.qwith{display:flex;align-items:center;gap:8px;font-weight:500;color:var(--muted);font-size:.9rem}
+.qopts{display:flex;flex-direction:column;gap:6px}
+.qopt{display:flex;align-items:center;gap:13px;width:100%;text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg);transition:border-color .15s,background .15s}
+.qopt:hover{border-color:var(--faint)}
+.qopt[aria-checked="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
+.radio{width:20px;height:20px;flex:none;border-radius:999px;border:2px solid var(--line);transition:border .15s}
+.qopt[aria-checked="true"] .radio{border:6px solid var(--accent)}
+.qtext{display:flex;flex-direction:column;gap:1px;min-width:0}
+.qtext b{font-weight:600;font-size:.93rem}
+.qtext small{font-size:.8rem;color:var(--muted)}
+.qopt[aria-checked="true"] .qtext small{color:var(--accent)}
+.qdivider{height:1px;background:var(--line);margin:16px 0}

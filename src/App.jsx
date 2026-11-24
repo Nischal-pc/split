@@ -49,6 +49,17 @@ const SPLIT_MODES = [
   ['percent', 'Percent', 'Give each person a share of the total, in %.'],
   ['shares', 'Shares', 'Someone with 2 shares pays twice as much as someone with 1.'],
 ]
+// Splitwise-style one-tap choices: [id, title, detail]. `group` = more than one other person.
+function quickOptions({ name, n, amt, cur, group }) {
+  const each = money(Math.round(amt / n), cur), full = money(amt, cur), has = amt > 0
+  return [
+    ['iPaidEqual', 'You paid, split equally', has && (group ? `${each} each — everyone owes you their share` : `${name} owes you ${each}`)],
+    ['theyOweFull', `You paid, ${name} owes you everything`, has && `${name} owes you ${full}`],
+    ['theyPaidEqual', `${name} paid, split equally`, has && `You owe ${name} ${each}`],
+    ['iOweFull', `${name} paid, you owe everything`, has && `You owe ${name} ${full}`],
+    ['custom', 'Something else', 'Different amounts, percentages, shares or payer'],
+  ]
+}
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
 
@@ -279,7 +290,10 @@ function HomeTab({ user, onOpen }) {
   return (
     <main className="wrap">
       <section className="dash" aria-label="Your balances">
-        <div className="greet">Hi {first}</div>
+        <div className="dash-hello">
+          <div className="acct-avatar sm" aria-hidden="true">{first.slice(0, 1).toUpperCase()}</div>
+          <div><div className="greet">Hi {first}</div><div className="dash-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
+        </div>
         {groups === null ? <div className="dash-total muted">Loading…</div>
           : !gs.length ? <>
             <div className="dash-total">Welcome 👋</div>
@@ -289,7 +303,7 @@ function HomeTab({ user, onOpen }) {
             <div className="dash-total">Your balances</div>
             <p className="dash-sub">You use more than one currency, so each balance is shown with its group below.</p>
           </>
-          : <>
+          : <div className="dash-card">
             <div className="dash-label">Total balance</div>
             <div className={'dash-total num ' + (overall > 0 ? 'pos' : overall < 0 ? 'neg' : '')}>
               {overall === 0 ? 'All settled up' : (overall > 0 ? '+' : '−') + money(Math.abs(overall), oneCur)}</div>
@@ -309,7 +323,7 @@ function HomeTab({ user, onOpen }) {
                 <span className="b-neg" style={{ flexGrow: owe }} /><span className="b-pos" style={{ flexGrow: owed }} />
               </div>}
             </div>
-          </>}
+          </div>}
       </section>
 
       <div className="quick">
@@ -691,6 +705,8 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const [repeat, setRepeat] = useState(edit?.repeat || 'none')
   const [notes, setNotes] = useState(edit?.notes || '')
   const [type, setType] = useState(edit ? 'exact' : 'equal')
+  const [mode, setMode] = useState(edit ? 'custom' : 'iPaidEqual')
+  const [other, setOther] = useState(null)
   // Track who is *left out* (not who is in), so members that load after the sheet opens are included by default.
   const [out, setOut] = useState(() => edit && editSplits?.length ? members.map(m => m.user_id).filter(id => !editSplits.some(s => s.member_id === id)) : [])
   // Raw text per person for the active mode: cents-as-text for exact, else a number (percent / shares).
@@ -720,10 +736,21 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     finally { setScan(0) }
   }
 
-  const picks = members.map(m => m.user_id).filter(id => !out.includes(id))
+  // Quick choices (Splitwise-style). 'custom' reveals the detailed split controls.
+  const others = members.filter(m => m.user_id !== user.id)
+  const who = (other && others.some(m => m.user_id === other)) ? other : others[0]?.user_id
+  const allIds = members.map(m => m.user_id)
+  const quick = mode !== 'custom' && others.length > 0
+  const eff = !quick ? { P: paidBy, T: type, X: out } : {
+    iPaidEqual: { P: user.id, T: 'equal', X: [] },
+    theyPaidEqual: { P: who, T: 'equal', X: [] },
+    theyOweFull: { P: user.id, T: 'equal', X: allIds.filter(id => id !== who) },
+    iOweFull: { P: who, T: 'equal', X: allIds.filter(id => id !== user.id) },
+  }[mode]
+  const picks = members.map(m => m.user_id).filter(id => !eff.X.includes(id))
   const toggle = id => setOut(o => o.includes(id) ? o.filter(x => x !== id) : [...o, id])
-  const vals = Object.fromEntries(picks.map(id => [id, type === 'exact' ? toCents(txt[id]) : (parseFloat(txt[id]) || 0)]))
-  const owed = picks.length ? splitsFromDraft({ amount: amt, type, picks, vals, payer: paidBy }) : {}
+  const vals = Object.fromEntries(picks.map(id => [id, eff.T === 'exact' ? toCents(txt[id]) : (parseFloat(txt[id]) || 0)]))
+  const owed = picks.length ? splitsFromDraft({ amount: amt, type: eff.T, picks, vals, payer: eff.P }) : {}
   const nice = n => String(+n.toFixed(2))
 
   // Switching mode starts from an even split the person can then adjust.
@@ -738,15 +765,15 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   let remain
   const sum = picks.reduce((s, id) => s + vals[id], 0)
   if (!picks.length) remain = { ok: false, text: 'Tap at least one person to split with' }
-  else if (type === 'equal') remain = { ok: true, text: `${money(Math.round(amt / picks.length), cur)} each · ${picks.length} ${picks.length === 1 ? 'person' : 'people'}` }
-  else if (type === 'exact') {
+  else if (eff.T === 'equal') remain = { ok: true, text: `${money(Math.round(amt / picks.length), cur)} each · ${picks.length} ${picks.length === 1 ? 'person' : 'people'}` }
+  else if (eff.T === 'exact') {
     const diff = amt - sum
     remain = { ok: diff === 0 && amt > 0, text: amt === 0 ? 'Enter the total first' : diff === 0 ? `Adds up to ${money(amt, cur)}` : diff > 0 ? `${money(diff, cur)} left to assign` : `${money(-diff, cur)} too much` }
-  } else if (type === 'percent') {
+  } else if (eff.T === 'percent') {
     const diff = 100 - sum
     remain = { ok: Math.abs(diff) < 0.001, text: Math.abs(diff) < 0.001 ? 'Adds up to 100%' : diff > 0 ? `${nice(diff)}% left to assign` : `${nice(-diff)}% too much` }
   } else remain = { ok: sum > 0, text: sum > 0 ? `${nice(sum)} ${sum === 1 ? 'share' : 'shares'} · ${money(Math.round(amt / sum), cur)} per share` : 'Give someone at least one share' }
-  const status = remain.ok ? 'ok' : amt === 0 && type !== 'equal' ? '' : 'bad'
+  const status = remain.ok ? 'ok' : amt === 0 && eff.T !== 'equal' ? '' : 'bad'
 
   async function save() {
     setErr('')
@@ -754,7 +781,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     if (amt <= 0) return setErr('Enter an amount')
     if (!picks.length) return setErr('Pick who shares this')
     // Appwrite membership privacy can blank other members' IDs; saving would merge them into one person.
-    if (picks.some(id => !id) || !paidBy) return setErr('Can’t see who’s in this group yet. In Appwrite Console → Auth → Security → Memberships privacy, turn on User ID and Name, then reload.')
+    if (picks.some(id => !id) || !eff.P) return setErr('Can’t see who’s in this group yet. In Appwrite Console → Auth → Security → Memberships privacy, turn on User ID and Name, then reload.')
     if (!remain.ok) return setErr('Split does not add up yet')
     setBusy(true)
     // only send optional fields that are set (or being cleared) so old backends keep working
@@ -764,7 +791,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
       extra.repeat = repeat
       if (!edit || edit.repeat !== repeat || !edit.next_on) extra.next_on = nextDate(date, repeat)
     } else if (edit?.repeat) { extra.repeat = ''; extra.next_on = '' }
-    const payload = { description: desc.trim(), amount_cents: amt, paid_by: paidBy, category: cat, spent_on: date, owed, extra }
+    const payload = { description: desc.trim(), amount_cents: amt, paid_by: eff.P, category: cat, spent_on: date, owed, extra }
     try {
       if (edit) await db.updateExpense(group, edit.id, payload)
       else await db.addExpense(group, payload, user.id)
@@ -792,6 +819,24 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
           <input className="inp amt-inp num" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></div></label>
 
       <section className="splitbox" aria-label="How to split">
+        {others.length > 0 && <>
+          <div className="qhead">
+            <span>Split</span>
+            {others.length > 1 && <label className="qwith">with
+              <select className="chipsel" aria-label="Who is this with" value={who} onChange={e => setOther(e.target.value)}>
+                {others.map(m => <option key={m.user_id} value={m.user_id}>{m.display_name}</option>)}</select></label>}
+          </div>
+          <div className="qopts" role="radiogroup" aria-label="How to split">
+            {quickOptions({ name: nameOf(members, who), n: members.length, amt, cur, group: others.length > 1 }).map(([id, title, sub]) => (
+              <button key={id} type="button" role="radio" aria-checked={mode === id} className="qopt" onClick={() => setMode(id)}>
+                <span className="radio" aria-hidden="true" />
+                <span className="qtext"><b>{title}</b>{sub && <small>{sub}</small>}</span>
+              </button>
+            ))}
+          </div>
+        </>}
+        {!quick && <>
+        {others.length > 0 && <div className="qdivider" />}
         <div className="paidby">
           <span>Paid by</span>
           <select className="chipsel" aria-label="Who paid" value={paidBy} onChange={e => setPaidBy(e.target.value)}>
@@ -832,6 +877,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
           })}
         </div>
         <div className={'remain ' + status} role="status">{remain.ok && <Ic.check />}<span>{remain.text}</span></div>
+        </>}
       </section>
 
       <div className="two">
