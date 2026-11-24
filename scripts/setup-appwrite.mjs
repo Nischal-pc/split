@@ -51,7 +51,8 @@ async function waitAvailable(col) {
 
 async function main() {
   console.log('Database:', DB)
-  await ok409('database ' + DB, () => db.create(DB, 'SplitIt'))
+  try { await db.get(DB); console.log('  = database', DB, '(exists)') }
+  catch { await ok409('database ' + DB, () => db.create(DB, 'SplitIt')) }
 
   for (const [id, def] of Object.entries(collections)) {
     console.log('\nCollection:', id)
@@ -60,7 +61,7 @@ async function main() {
     await ok409('collection', () => db.createCollection(DB, id, id, [Permission.create(Role.users())], true))
     for (const [kind, key, a, b] of def.attrs) {
       if (kind === 's') await ok409('attr ' + key, () => db.createStringAttribute(DB, id, key, a, b))
-      else await ok409('attr ' + key, () => db.createIntegerAttribute(DB, id, key, b /* required */))
+      else await ok409('attr ' + key, () => db.createIntegerAttribute(DB, id, key, a /* required */))
     }
     await waitAvailable(id)
     for (const key of def.idx) {
