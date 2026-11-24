@@ -33,6 +33,8 @@ const Ic = {
   exit: () => <Svg width="17" height="17"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5M21 12H9" /></Svg>,
   download: () => <Svg width="17" height="17"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5M12 15V3" /></Svg>,
   camera: () => <Svg width="18" height="18"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></Svg>,
+  copy: () => <Svg width="15" height="15"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></Svg>,
+  check: () => <Svg width="15" height="15"><path d="M20 6 9 17l-5-5" /></Svg>,
 }
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
@@ -182,10 +184,15 @@ function ResetPassword({ rec, onDone }) {
 /* ---------------- Home ---------------- */
 function Home({ user, onOpen }) {
   const [groups, setGroups] = useState(null)
+  const [recent, setRecent] = useState([])
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
 
-  async function load() { try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) } }
+  async function load() {
+    try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) }
+    try { setRecent(await db.listRecentActivity(15)) } catch { setRecent([]) }
+  }
   useEffect(() => { load() }, [])
+  const gmap = Object.fromEntries((groups || []).map(g => [g.id, g.name]))
 
   const first = displayName(user).split(/[\s@]/)[0]
   const overall = (groups || []).reduce((s, g) => s + g.myNet, 0)
@@ -220,6 +227,19 @@ function Home({ user, onOpen }) {
               </button>
             ))}
           </div>}
+      {recent.length > 0 && <>
+        <div className="eyebrow mt">Recent activity</div>
+        <div className="card list">
+          {recent.map(a => (
+            <div className="row" key={a.id}>
+              <div className="grow"><b>{a.actor_name}</b> <span className="muted">{a.text}</span>
+                {gmap[a.group_id] && <span className="faint tiny"> · {gmap[a.group_id]}</span>}</div>
+              <div className="tiny faint" style={{ flex: 'none' }}>{timeAgo(a.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      </>}
+
       <div className="actionbar">
         <button className="btn ghost" onClick={() => setSheet('join')}>Join by code</button>
         <button className="btn" onClick={() => setSheet('new')}>+ New group</button>
@@ -288,7 +308,9 @@ function GroupView({ groupId, user, onBack }) {
   useEffect(() => {
     let unsub = () => {}
     ;(async () => {
-      const g = await db.getGroup(groupId); setGroup(g)
+      const g = await db.getGroup(groupId)
+      g.join_code = g.join_code || await db.ensureJoinCode(g)
+      setGroup(g)
       const [mem, d] = await Promise.all([db.listMembers(g.team_id), db.loadGroupData(groupId)])
       setMembers(mem); setData(d)
       unsub = db.subscribeGroup(g.team_id, load)
@@ -309,6 +331,7 @@ function GroupView({ groupId, user, onBack }) {
         <h2>{group.name}</h2>
         <div className="members">{members.map(m => m.display_name + (m.confirmed ? '' : ' (invited)')).join(' · ')}</div>
         <div className="ghead-actions">
+          {group.join_code && <CodeChip code={group.join_code} />}
           <button className="btn ghost sm" onClick={() => setSheet('people')}>+ Add people</button>
         </div>
       </div>
@@ -448,6 +471,12 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
 
 function Avatar({ members, id }) {
   return <div className="avatar" style={{ background: colorOf(members, id) }}>{nameOf(members, id).slice(0, 1).toUpperCase()}</div>
+}
+
+function CodeChip({ code }) {
+  const [done, setDone] = useState(false)
+  const copy = async () => { try { await navigator.clipboard.writeText(code); setDone(true); setTimeout(() => setDone(false), 1500) } catch { /* ignore */ } }
+  return <button className="codepill" onClick={copy} title="Copy invite code">Code <b>{code}</b> {done ? <Ic.check /> : <Ic.copy />}</button>
 }
 
 function ExpenseList({ members, expenses, splits, cur, me, onOpen }) {

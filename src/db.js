@@ -85,6 +85,17 @@ export async function joinByCode(code, name) {
 export async function getGroup(groupId) {
   return norm(await databases.getDocument(DB, C.groups, groupId))
 }
+// Backfill a join code for groups made before codes existed.
+export async function ensureJoinCode(group) {
+  if (group.join_code) return group.join_code
+  const code = genCode()
+  try { await databases.updateDocument(DB, C.groups, group.id, { join_code: code }); return code } catch { return null }
+}
+// Recent activity across all the user's groups (RLS limits to groups they belong to).
+export async function listRecentActivity(limit = 20) {
+  const r = await databases.listDocuments(DB, C.activity, [Query.orderDesc('$createdAt'), Query.limit(limit)])
+  return r.documents.map(norm)
+}
 export async function deleteGroup(group) {
   await databases.deleteDocument(DB, C.groups, group.id).catch(() => {})
   await teams.delete(group.team_id) // removes memberships; child docs become inaccessible (left as orphans)
