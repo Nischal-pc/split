@@ -84,7 +84,7 @@ export async function listPeople(userId) {
   ])
   const groups = await Promise.all(gr.documents.map(async g => ({
     name: g.name, currency: g.currency,
-    members: await listMembers(g.team_id).catch(() => []),
+    members: await groupMembers(g).catch(() => []),
     expenses: e.documents.filter(x => x.group_id === g.$id).map(norm),
     splits: s.documents.filter(x => x.group_id === g.$id),
     settlements: st.documents.filter(x => x.group_id === g.$id),
@@ -134,6 +134,38 @@ export async function deleteGroup(group) {
 }
 
 /* ---------- members (team memberships) ---------- */
+// Guests: people without an account, stored on the group as JSON [{ id: 'guest_…', name }].
+// They take part in splits like anyone else; mergeGuest() hands their history to a real account.
+export const parseGuests = g => { try { return JSON.parse(g.guests || '[]') } catch { return [] } }
+export const isGuest = id => String(id).startsWith('guest_')
+export async function groupMembers(group) {
+  const team = await listMembers(group.team_id)
+  return [...team, ...parseGuests(group).map(x => ({ user_id: x.id, display_name: x.name, guest: true, confirmed: true, membership_id: x.id, roles: [], email: '' }))]
+}
+async function saveGuests(groupId, change) {
+  const fresh = await getGroup(groupId) // re-read so two people adding guests don't overwrite each other
+  await databases.updateDocument(DB, C.groups, groupId, { guests: JSON.stringify(change(parseGuests(fresh))) })
+}
+export async function addGuest(groupId, name) {
+  const guest = { id: 'guest_' + ID.unique().slice(-12), name: name.slice(0, 60) }
+  await saveGuests(groupId, list => [...list, guest])
+  return guest
+}
+export async function removeGuest(groupId, guestId) { await saveGuests(groupId, list => list.filter(x => x.id !== guestId)) }
+// Move everything recorded for a guest onto a real member, then drop the guest.
+export async function mergeGuest(groupId, guestId, userId) {
+  const q = [Query.equal('group_id', groupId), Query.limit(5000)]
+  const [e, s, st] = await Promise.all([C.expenses, C.splits, C.settlements].map(c => databases.listDocuments(DB, c, q)))
+  const swap = v => v === guestId ? userId : v
+  await Promise.all([
+    ...e.documents.filter(d => d.paid_by === guestId).map(d => databases.updateDocument(DB, C.expenses, d.$id, { paid_by: userId })),
+    ...s.documents.filter(d => d.member_id === guestId).map(d => databases.updateDocument(DB, C.splits, d.$id, { member_id: userId })),
+    ...st.documents.filter(d => d.from_member === guestId || d.to_member === guestId)
+      .map(d => databases.updateDocument(DB, C.settlements, d.$id, { from_member: swap(d.from_member), to_member: swap(d.to_member) })),
+  ])
+  await removeGuest(groupId, guestId)
+}
+
 // Appwrite Cloud returns an empty userId for everyone but you, so fill the gaps from the
 // server function. membershipId -> userId never changes, so answers are cached on the device.
 const MID_KEY = 'splitit.memberIds'

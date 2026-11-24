@@ -390,3 +390,9 @@ details.more summary:hover{color:var(--fg)}
 /* default split checkbox */
 .defchk{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:.88rem;color:var(--muted);cursor:pointer}
 .defchk input{width:18px;height:18px;accent-color:var(--accent);flex:none}
+
+/* guests (no account) */
+.guestform{display:flex;gap:10px;margin-top:14px}
+.guestform .inp{flex:1;min-width:0}
+.linkbtn{background:none;border:none;padding:0;color:var(--accent);font-weight:600;font-size:inherit}
+.chipsel.sm{padding:4px 28px 4px 10px;font-size:.8rem;font-weight:600;color:var(--fg)}

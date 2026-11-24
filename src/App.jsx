@@ -405,7 +405,7 @@ function QuickAdd({ groups, user, onClose, onDone }) {
   const [err, setErr] = useState('')
   async function pick(id) {
     setBusy(id); setErr('')
-    try { const group = await db.getGroup(id); setPicked({ group, members: await db.listMembers(group.team_id) }) }
+    try { const group = await db.getGroup(id); setPicked({ group, members: await db.groupMembers(group) }) }
     catch (e) { setErr(e.message || 'Could not open that group'); setBusy(null) }
   }
   if (picked) return <AddExpense group={picked.group} members={picked.members} user={user} onClose={onDone} />
@@ -552,7 +552,7 @@ function GroupView({ groupId, user, onBack }) {
   async function load() {
     const g = await db.getGroup(groupId)
     setGroup(g)
-    const [mem, d] = await Promise.all([db.listMembers(g.team_id), db.loadGroupData(groupId)])
+    const [mem, d] = await Promise.all([db.groupMembers(g), db.loadGroupData(groupId)])
     setMembers(mem); setData(d)
   }
   useEffect(() => {
@@ -561,7 +561,7 @@ function GroupView({ groupId, user, onBack }) {
       const g = await db.getGroup(groupId)
       g.join_code = g.join_code || await db.ensureJoinCode(g)
       setGroup(g)
-      const [mem, d] = await Promise.all([db.listMembers(g.team_id), db.loadGroupData(groupId)])
+      const [mem, d] = await Promise.all([db.groupMembers(g), db.loadGroupData(groupId)])
       setMembers(mem); setData(d)
       // post any due copies of recurring expenses, then reload (we're not subscribed yet)
       const made = await db.runRecurring(g, d.expenses, d.splits, user.id).catch(() => 0)
@@ -642,7 +642,7 @@ function GroupView({ groupId, user, onBack }) {
       )}
 
       {sheet === 'add' && <AddExpense group={group} members={members} user={user} onClose={() => setSheet(null)} />}
-      {sheet === 'people' && <ManagePeople group={group} members={members} user={user} onClose={() => setSheet(null)} onLeave={onBack} />}
+      {sheet === 'people' && <ManagePeople group={group} members={members} nets={nets} user={user} onClose={() => setSheet(null)} onLeave={onBack} onChanged={load} />}
       {sheet && sheet.settle !== undefined && <SettleUp group={group} members={members} user={user} pre={sheet.settle} onClose={() => setSheet(null)} />}
       {sheet && sheet.detail && <ExpenseDetail group={group} members={members} user={user} expense={sheet.detail}
         splits={splits.filter(s => s.expense_id === sheet.detail.id)} onClose={() => setSheet(null)} onEdit={() => setSheet({ edit: sheet.detail })}
@@ -664,8 +664,10 @@ function MyBalance({ net, cur }) {
   )
 }
 
-function ManagePeople({ group, members, user, onClose, onLeave }) {
+function ManagePeople({ group, members, nets, user, onClose, onLeave, onChanged }) {
   const [email, setEmail] = useState('')
+  const [guestName, setGuestName] = useState('')
+  const [linking, setLinking] = useState(null) // guest id being linked to an account
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -681,9 +683,30 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
     catch (e2) { setErr(e2.message || 'Could not send invite') } finally { setBusy(false) }
   }
   async function remove(m) {
-    try { await db.removeMember(group.team_id, m.membership_id); logActivity(group, myName, `removed ${m.display_name}`); onClose() }
-    catch (e2) { setErr(e2.message) }
+    setErr('')
+    if (m.guest && nets[m.user_id]) return setErr(`${m.display_name} still has a balance. Settle up first, or link them to their account.`)
+    try {
+      if (m.guest) { await db.removeGuest(group.id, m.user_id); onChanged() }
+      else { await db.removeMember(group.team_id, m.membership_id); onClose() }
+      logActivity(group, myName, `removed ${m.display_name}`)
+    } catch (e2) { setErr(e2.message) }
   }
+  async function addGuest(e) {
+    e.preventDefault(); const name = guestName.trim(); if (!name) return
+    setErr(''); setBusy(true)
+    try { await db.addGuest(group.id, name); logActivity(group, myName, `added ${name} (no account)`); setGuestName(''); await onChanged() }
+    catch (e2) { setErr(e2.message || 'Could not add them') } finally { setBusy(false) }
+  }
+  async function link(guest, userId) {
+    if (!userId) return
+    setErr(''); setBusy(true)
+    try {
+      await db.mergeGuest(group.id, guest.user_id, userId)
+      logActivity(group, myName, `linked ${guest.display_name} to ${nameOf(members, userId)}’s account`)
+      setLinking(null); await onChanged()
+    } catch (e2) { setErr(e2.message || 'Could not link them') } finally { setBusy(false) }
+  }
+  const accounts = members.filter(m => !m.guest)
   async function leave() {
     try { await db.leaveGroup(group.team_id, myMembership.membership_id); onLeave() } catch (e2) { setErr(e2.message) }
   }
@@ -713,11 +736,26 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
         {members.map(m => (
           <div className="row" key={m.membership_id}>
             <Avatar members={members} id={m.user_id} />
-            <div className="grow">{m.display_name}{m.user_id === user.id && ' (you)'}{!m.confirmed && <span className="faint tiny"> · invited</span>}</div>
+            <div className="grow">{m.display_name}{m.user_id === user.id && ' (you)'}{!m.confirmed && <span className="faint tiny"> · invited</span>}
+              {m.guest && <div className="tiny faint">No account ·{' '}
+                {linking === m.user_id
+                  ? <select className="chipsel sm" autoFocus aria-label={`Link ${m.display_name} to an account`} defaultValue="" disabled={busy}
+                      onChange={e => link(m, e.target.value)} onBlur={() => setLinking(null)}>
+                      <option value="" disabled>Who is {m.display_name}?</option>
+                      {accounts.map(a => <option key={a.user_id} value={a.user_id}>{a.display_name}</option>)}</select>
+                  : <button className="linkbtn" onClick={() => setLinking(m.user_id)}>Link to account</button>}</div>}
+            </div>
             {m.user_id !== user.id && <button className="del" title={'Remove ' + m.display_name} onClick={() => remove(m)}><Ic.trash /></button>}
           </div>
         ))}
       </div>
+
+      <form className="guestform" onSubmit={addGuest}>
+        <input className="inp" value={guestName} onChange={e => setGuestName(e.target.value)} maxLength={60}
+          placeholder="Add someone without an account, e.g. Mom" aria-label="Name of someone without an account" />
+        <button className="btn" disabled={busy || !guestName.trim()}>Add</button>
+      </form>
+      <p className="split-hint">They can be in splits right away. If they sign up later, tap “Link to account” to move their history over.</p>
 
       {err && <div className="err mt"><Ic.alert />{err}</div>}
 
