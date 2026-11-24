@@ -38,6 +38,7 @@ const Ic = {
   home: () => <Svg><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></Svg>,
   pulse: () => <Svg><path d="M3 12h4l3 8 4-16 3 8h4" /></Svg>,
   user: () => <Svg><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></Svg>,
+  share: () => <Svg width="17" height="17"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" /><path d="M16 6l-4-4-4 4M12 2v13" /></Svg>,
   plus: () => <Svg><path d="M12 5v14M5 12h14" /></Svg>,
   userPlus: () => <Svg><circle cx="10" cy="8" r="4" /><path d="M2 21c0-4 4-6 8-6s8 2 8 6M19 4v6M16 7h6" /></Svg>,
   ticket: () => <Svg><path d="M3 9a3 3 0 0 0 0 6v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a3 3 0 0 1 0-6V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z" /><path d="M14 5v14" strokeDasharray="2 2" /></Svg>,
@@ -81,7 +82,19 @@ export default function App() {
     await db.acceptInviteFromUrl().catch(() => {})
     setUser(await db.getUser())
   }
-  useEffect(() => { boot() }, [])
+  useEffect(() => {
+    // ?join=CODE invite links: remember the code through sign-up / log-in, then join.
+    const code = new URLSearchParams(window.location.search).get('join')
+    if (code) { sessionStorage.setItem('splitit.join', code.trim().toUpperCase()); db.clearUrlParams() }
+    boot()
+  }, [])
+  const [joinErr, setJoinErr] = useState('')
+  useEffect(() => {
+    const code = user && sessionStorage.getItem('splitit.join')
+    if (!code) return
+    sessionStorage.removeItem('splitit.join')
+    db.joinByCode(code, displayName(user)).then(setGroupId).catch(e => setJoinErr(e.message || 'That invite link didn’t work'))
+  }, [user])
   const onAuthed = async () => { await db.acceptInviteFromUrl().catch(() => {}); setUser(await db.getUser()) }
 
   const signOut = async () => { await db.signOut(); setGroupId(null); setUser(null) }
@@ -90,7 +103,21 @@ export default function App() {
   if (recovery) return <ResetPassword rec={recovery} onDone={() => setRecovery(null)} />
   if (!user) return <Auth onAuthed={onAuthed} />
   if (groupId) return <GroupView groupId={groupId} user={user} onBack={() => setGroupId(null)} />
-  return <Shell user={user} onOpen={setGroupId} onSignOut={signOut} />
+  return <>
+    <Shell user={user} onOpen={setGroupId} onSignOut={signOut} />
+    {joinErr && <Toast text={joinErr} tone="bad" onDone={() => setJoinErr('')} />}
+  </>
+}
+
+// Short-lived message above the bottom bar, with an optional action (e.g. Undo).
+function Toast({ text, action, onAction, onDone, ms = 7000, tone = '' }) {
+  useEffect(() => { const t = setTimeout(onDone, ms); return () => clearTimeout(t) }, [text])
+  return (
+    <div className={'toast ' + tone} role="status">
+      <span>{text}</span>
+      {action && <button onClick={onAction}>{action}</button>}
+    </div>
+  )
 }
 
 /* ---------------- Shell with bottom-tab navigation ---------------- */
@@ -364,8 +391,39 @@ function HomeTab({ user, onOpen, onAccount }) {
 
       {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
       {sheet === 'friend' && <AddFriend user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
+      {sheet === 'add' && <QuickAdd groups={gs} user={user} onClose={() => setSheet(null)} onDone={() => { setSheet(null); load() }} />}
+      {gs.length > 0 && !sheet && <button className="fab" onClick={() => setSheet('add')}><Ic.plus /><span>Add expense</span></button>}
       {sheet === 'join' && <JoinGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
     </main>
+  )
+}
+
+// Add an expense from Home: pick the group or friend first (Splitwise's global add button).
+function QuickAdd({ groups, user, onClose, onDone }) {
+  const [picked, setPicked] = useState(null) // { group, members }
+  const [busy, setBusy] = useState(null)
+  const [err, setErr] = useState('')
+  async function pick(id) {
+    setBusy(id); setErr('')
+    try { const group = await db.getGroup(id); setPicked({ group, members: await db.listMembers(group.team_id) }) }
+    catch (e) { setErr(e.message || 'Could not open that group'); setBusy(null) }
+  }
+  if (picked) return <AddExpense group={picked.group} members={picked.members} user={user} onClose={onDone} />
+  const friends = groups.filter(g => g.kind === 'friend'), rest = groups.filter(g => g.kind !== 'friend')
+  return (
+    <Sheet title="Add expense" onClose={onClose}>
+      <p className="split-hint">Who is this expense with?</p>
+      {err && <div className="err"><Ic.alert />{err}</div>}
+      <div className="card list">
+        {[...friends, ...rest].map(g => (
+          <button key={g.id} className="row rowbtn" onClick={() => pick(g.id)} disabled={!!busy}>
+            <div className="badge">{g.kind === 'friend' ? '🧑' : '👥'}</div>
+            <div className="grow"><b className="truncate">{g.name}</b></div>
+            <div className="chev">{busy === g.id ? '…' : <Ic.chev />}</div>
+          </button>
+        ))}
+      </div>
+    </Sheet>
   )
 }
 
@@ -466,6 +524,21 @@ function GroupView({ groupId, user, onBack }) {
   const [sheet, setSheet] = useState(null)
   const [tab, setTab] = useState('expenses')
   const [reminded, setReminded] = useState({})
+  const [undo, setUndo] = useState(null) // { expense, splits } just deleted
+
+  // Re-create a just-deleted expense (new id; its comments are not restored).
+  async function restore() {
+    const { expense: e, splits: sp } = undo
+    setUndo(null)
+    const extra = {}
+    if (e.notes) extra.notes = e.notes
+    if (e.repeat) { extra.repeat = e.repeat; extra.next_on = e.next_on }
+    try {
+      await db.addExpense(group, { description: e.description, amount_cents: e.amount_cents, paid_by: e.paid_by, category: e.category, spent_on: e.spent_on,
+        owed: Object.fromEntries(sp.map(x => [x.member_id, x.owed_cents])), extra }, user.id)
+      logActivity(group, displayName(user), `restored “${e.description}”`)
+    } catch { /* ignore */ }
+  }
 
   async function remind(s) {
     const text = `🔔 Reminder: ${nameOf(members, s.from)}, you owe ${nameOf(members, s.to)} ${money(s.amount, group.currency)}. Settle up when you can!`
@@ -512,7 +585,7 @@ function GroupView({ groupId, user, onBack }) {
         <div className="members">{members.map(m => m.display_name + (m.confirmed ? '' : ' (invited)')).join(' · ')}</div>
         <div className="ghead-actions">
           {group.join_code && <CodeChip code={group.join_code} />}
-          <button className="btn ghost sm" onClick={() => setSheet('people')}>+ Add people</button>
+          {group.join_code && <ShareInvite group={group} />}
           <button className="btn ghost sm" onClick={() => setSheet('people')}>Settings</button>
         </div>
       </div>
@@ -572,7 +645,9 @@ function GroupView({ groupId, user, onBack }) {
       {sheet === 'people' && <ManagePeople group={group} members={members} user={user} onClose={() => setSheet(null)} onLeave={onBack} />}
       {sheet && sheet.settle !== undefined && <SettleUp group={group} members={members} user={user} pre={sheet.settle} onClose={() => setSheet(null)} />}
       {sheet && sheet.detail && <ExpenseDetail group={group} members={members} user={user} expense={sheet.detail}
-        splits={splits.filter(s => s.expense_id === sheet.detail.id)} onClose={() => setSheet(null)} onEdit={() => setSheet({ edit: sheet.detail })} />}
+        splits={splits.filter(s => s.expense_id === sheet.detail.id)} onClose={() => setSheet(null)} onEdit={() => setSheet({ edit: sheet.detail })}
+        onDeleted={(expense, sp) => setUndo({ expense, splits: sp })} />}
+      {undo && <Toast key={undo.expense.id} text={`Deleted “${undo.expense.description}”`} action="Undo" onAction={restore} onDone={() => setUndo(null)} />}
       {sheet && sheet.edit && <AddExpense group={group} members={members} user={user}
         edit={sheet.edit} editSplits={splits.filter(s => s.expense_id === sheet.edit.id)} onClose={() => setSheet(null)} />}
     </main>
@@ -619,8 +694,9 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
   return (
     <Sheet title="People & settings" onClose={onClose}>
       {group.join_code && <>
-        <div className="note">Share this code — people tap “Join by code” to join instantly.</div>
+        <div className="note">Send the invite link, or share this code — people tap “Join group” and type it in.</div>
         <div className="codebig">{group.join_code}</div>
+        <ShareInvite group={group} className="btn block" />
       </>}
       <div className="eyebrow mt">Or invite by email</div>
       <div className="note">Appwrite emails them a link to join (works for people who aren’t signed up yet).</div>
@@ -658,6 +734,16 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
 
 function Avatar({ members, id }) {
   return <div className="avatar" style={{ background: colorOf(members, id) }}>{nameOf(members, id).slice(0, 1).toUpperCase()}</div>
+}
+
+// Send the ?join= link through the phone's share sheet (or copy it on desktop).
+function ShareInvite({ group, className = 'btn ghost sm' }) {
+  const [done, setDone] = useState('')
+  async function go() {
+    const r = await db.shareText('SplitIt', `Join “${group.name}” on SplitIt so we can split expenses.`, db.inviteLink(group.join_code)).catch(() => null)
+    if (r === 'copied') { setDone('Link copied'); setTimeout(() => setDone(''), 1800) }
+  }
+  return <button className={className + ' withicon'} onClick={go}>{done ? <Ic.check /> : <Ic.share />}{done || 'Share invite link'}</button>
 }
 
 function CodeChip({ code }) {
@@ -717,13 +803,16 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const [date, setDate] = useState(edit?.spent_on || todayISO())
   const [repeat, setRepeat] = useState(edit?.repeat || 'none')
   const [notes, setNotes] = useState(edit?.notes || '')
-  const [type, setType] = useState(edit ? 'exact' : 'equal')
-  const [mode, setMode] = useState(edit ? 'custom' : 'iPaidEqual')
+  // A group's saved default split (percent / shares / who's in) pre-fills new expenses.
+  const def = !edit && group.default_split ? (() => { try { return JSON.parse(group.default_split) } catch { return null } })() : null
+  const [type, setType] = useState(edit ? 'exact' : def?.type || 'equal')
+  const [mode, setMode] = useState(edit || def ? 'custom' : 'iPaidEqual')
+  const [saveDef, setSaveDef] = useState(!!def)
   const [other, setOther] = useState(null)
   // Track who is *left out* (not who is in), so members that load after the sheet opens are included by default.
-  const [out, setOut] = useState(() => edit && editSplits?.length ? members.map(m => m.user_id).filter(id => !editSplits.some(s => s.member_id === id)) : [])
+  const [out, setOut] = useState(() => edit && editSplits?.length ? members.map(m => m.user_id).filter(id => !editSplits.some(s => s.member_id === id)) : def?.out || [])
   // Raw text per person for the active mode: cents-as-text for exact, else a number (percent / shares).
-  const [txt, setTxt] = useState(() => Object.fromEntries((edit && editSplits || []).map(s => [s.member_id, (s.owed_cents / 100).toFixed(2)])))
+  const [txt, setTxt] = useState(() => def?.txt || Object.fromEntries((edit && editSplits || []).map(s => [s.member_id, (s.owed_cents / 100).toFixed(2)])))
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [scan, setScan] = useState(0) // 0 idle, 1..100 progress
@@ -808,6 +897,10 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     try {
       if (edit) await db.updateExpense(group, edit.id, payload)
       else await db.addExpense(group, payload, user.id)
+      // remember (or forget) this group's default split; amounts aren't reusable so 'exact' never becomes a default
+      const wantDef = !quick && saveDef && type !== 'exact'
+      if (wantDef) await db.setDefaultSplit(group.id, { type, txt, out }).catch(() => {})
+      else if (group.default_split && !quick) await db.setDefaultSplit(group.id, null).catch(() => {})
       logActivity(group, myName, `${edit ? 'edited' : 'added'} “${desc.trim()}” · ${money(amt, cur)}`)
       onClose()
     } catch (e) { setBusy(false); setErr(e.message || 'Could not save') }
@@ -890,6 +983,8 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
           })}
         </div>
         <div className={'remain ' + status} role="status">{remain.ok && <Ic.check />}<span>{remain.text}</span></div>
+        {type !== 'exact' && <label className="defchk"><input type="checkbox" checked={saveDef} onChange={e => setSaveDef(e.target.checked)} />
+          <span>Use this split by default in {group.name}</span></label>}
         </>}
       </section>
 
@@ -922,10 +1017,14 @@ function SettleUp({ group, members, user, pre, onClose }) {
   const [amount, setAmount] = useState(pre ? (pre.amount / 100).toFixed(2) : '')
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
+  const [copied, setCopied] = useState('')
   const cur = group.currency
+  const a = toCents(amount)
+  const toM = members.find(m => m.user_id === to), fromName = nameOf(members, from), toName = nameOf(members, to)
+  const copy = async (k, v) => { try { await navigator.clipboard.writeText(v); setCopied(k); setTimeout(() => setCopied(''), 1500) } catch { /* ignore */ } }
+  const ask = () => db.shareText('SplitIt', `Hi ${fromName}, you owe me ${money(a, cur)} for “${group.name}” on SplitIt. You can send it by e-Transfer to ${user.email}. Thanks!`).catch(() => {})
 
   async function record() {
-    const a = toCents(amount)
     if (a <= 0) return setErr('Enter an amount')
     if (from === to) return setErr('Pick two different people')
     try {
@@ -945,6 +1044,16 @@ function SettleUp({ group, members, user, pre, onClose }) {
             {members.map(m => <option key={m.user_id} value={m.user_id}>{m.display_name}</option>)}</select></label>
       </div>
       <label className="fld"><span>Amount ({cur})</span><input className="inp" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></label>
+      {from === user.id && to !== user.id && a > 0 && <div className="payhelp">
+        <div className="payhelp-t">Pay {toName} by Interac e-Transfer</div>
+        {toM?.email && <div className="payrow"><span className="muted">Send to</span><b className="truncate">{toM.email}</b>
+          <button type="button" className="btn ghost sm" onClick={() => copy('email', toM.email)}>{copied === 'email' ? 'Copied ✓' : 'Copy'}</button></div>}
+        <div className="payrow"><span className="muted">Amount</span><b className="num">{money(a, cur)}</b>
+          <button type="button" className="btn ghost sm" onClick={() => copy('amt', (a / 100).toFixed(2))}>{copied === 'amt' ? 'Copied ✓' : 'Copy'}</button></div>
+        <p className="split-hint" style={{ margin: '8px 0 0' }}>Send it from your banking app, then tap Record payment.</p>
+      </div>}
+      {to === user.id && from !== user.id && a > 0 &&
+        <button type="button" className="btn ghost block withicon" style={{ marginBottom: 16 }} onClick={ask}><Ic.share />Ask {fromName} to pay {money(a, cur)}</button>}
       <label className="fld"><span>Note (optional)</span><input className="inp" maxLength={200} value={note} onChange={e => setNote(e.target.value)} placeholder="e-Transfer, cash…" /></label>
       {err && <div className="err"><Ic.alert />{err}</div>}
       <button className="btn block" onClick={record}>Record payment</button>
@@ -1122,7 +1231,7 @@ function GroupActivityTab({ activity, expenses, cur, members }) {
 }
 
 /* ---------------- Expense detail + comments ---------------- */
-function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit }) {
+function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit, onDeleted }) {
   const [comments, setComments] = useState([])
   const [text, setText] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
@@ -1140,7 +1249,7 @@ function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit 
     try { await db.addComment(group, expense.id, user.id, myName, body) } catch { /* ignore */ }
   }
   async function del() {
-    try { await db.deleteExpense(expense.id); logActivity(group, myName, `deleted “${expense.description}”`); onClose() } catch { /* ignore */ }
+    try { await db.deleteExpense(expense.id); logActivity(group, myName, `deleted “${expense.description}”`); onDeleted?.(expense, splits); onClose() } catch { /* ignore */ }
   }
 
   return (

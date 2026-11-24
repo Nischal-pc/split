@@ -358,3 +358,35 @@ details.more summary:hover{color:var(--fg)}
   font-family:var(--disp);font-weight:700;font-size:1.05rem;box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 30%,transparent);transition:transform .12s}
 .me-btn:active{transform:scale(.94)}
 .dash-empty{padding-bottom:4px}
+
+/* floating "Add expense" on Home (above the tab bar) */
+.fab{position:fixed;z-index:11;right:max(20px,calc(50% - 240px));bottom:calc(84px + env(safe-area-inset-bottom));
+  display:flex;align-items:center;gap:8px;padding:14px 20px 14px 16px;border:none;border-radius:999px;
+  background:var(--accent);color:var(--surface);font-weight:600;font-size:.95rem;
+  box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 35%,transparent),0 2px 4px rgba(0,0,0,.08);transition:transform .12s}
+.fab:active{transform:scale(.95)}
+
+/* toast (undo / errors) */
+.toast{position:fixed;z-index:30;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));
+  width:min(480px,calc(100% - 32px));display:flex;align-items:center;gap:12px;padding:13px 14px 13px 18px;border-radius:16px;
+  background:var(--btn-bg);color:var(--btn-fg);font-size:.92rem;box-shadow:var(--sh-pop);animation:toastin .3s cubic-bezier(.16,1,.3,1)}
+.toast span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toast button{border:none;background:none;color:inherit;font-weight:700;padding:6px 8px;border-radius:8px;text-decoration:underline;text-underline-offset:3px}
+.toast.bad{background:var(--neg);color:#fff}
+/* slide only: the toast is visible even if the animation never runs */
+@keyframes toastin{from{transform:translate(-50%,14px)}to{transform:translate(-50%,0)}}
+
+.withicon{display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.btn.block.withicon{display:flex}
+
+/* settle up: e-Transfer helper */
+.payhelp{background:var(--surface);border-radius:var(--r-sm);box-shadow:var(--sh-1);padding:14px 16px;margin-bottom:16px}
+.payhelp-t{font-weight:600;margin-bottom:8px}
+.payrow{display:flex;align-items:center;gap:10px;padding:7px 0}
+.payrow+.payrow{border-top:1px solid var(--line)}
+.payrow .muted{font-size:.84rem;width:64px;flex:none}
+.payrow b{flex:1;min-width:0}
+
+/* default split checkbox */
+.defchk{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:.88rem;color:var(--muted);cursor:pointer}
+.defchk input{width:18px;height:18px;accent-color:var(--accent);flex:none}

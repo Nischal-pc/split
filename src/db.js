@@ -105,6 +105,10 @@ export async function joinByCode(code, name) {
   if (!r.ok) throw new Error(r.error || 'Could not join — is the code right?')
   return r.groupId
 }
+// Save (or clear with null) a group's default custom split: { type, txt, out }.
+export async function setDefaultSplit(groupId, split) {
+  await databases.updateDocument(DB, C.groups, groupId, { default_split: split ? JSON.stringify(split) : '' })
+}
 export async function getGroup(groupId) {
   return norm(await databases.getDocument(DB, C.groups, groupId))
 }
@@ -154,7 +158,7 @@ export async function listMembers(teamId) {
   const res = await teams.listMemberships(teamId)
   return (await fillUserIds(teamId, res.memberships)).map(m => ({
     user_id: m.userId, display_name: m.userName || m.userEmail || 'Member',
-    membership_id: m.$id, confirmed: m.confirm, roles: m.roles || [],
+    membership_id: m.$id, confirmed: m.confirm, roles: m.roles || [], email: m.userEmail || '',
   }))
 }
 export async function inviteByEmail(teamId, email) {
@@ -269,4 +273,16 @@ export function subscribeComments(expenseId, onNew) {
     const d = e.payload
     if (d && d.expense_id === expenseId && e.events.some(ev => ev.endsWith('.create'))) onNew(norm(d))
   })
+}
+
+/* ---------- invite links ---------- */
+export const inviteLink = code => `${window.location.origin}/?join=${encodeURIComponent(code)}`
+// Share sheet on phones, clipboard elsewhere. Returns 'shared' | 'copied' | null (cancelled).
+export async function shareText(title, text, url) {
+  if (navigator.share) {
+    try { await navigator.share({ title, text, url }); return 'shared' }
+    catch (e) { if (e.name === 'AbortError') return null }
+  }
+  await navigator.clipboard.writeText(url ? `${text} ${url}` : text)
+  return 'copied'
 }
