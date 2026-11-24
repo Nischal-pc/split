@@ -54,3 +54,31 @@ export function splitsFromDraft({ amount, type, picks, vals, payer }) {
 
 export const toCents = v => Math.round(parseFloat(v || 0) * 100) || 0
 export const money = (c, cur = '$') => (c < 0 ? '-' : '') + cur + (Math.abs(c) / 100).toFixed(2)
+
+// Parse OCR'd receipt text into {amount (cents), merchant}. Best-effort heuristic.
+export function parseReceipt(text) {
+  const lines = (text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  const amtRe = /(\d{1,6})[.,](\d{2})(?!\d)/
+  const amtReG = /(\d{1,6})[.,](\d{2})(?!\d)/g
+  const all = []
+  for (const l of lines) for (const x of l.match(amtReG) || []) { const m = x.match(amtRe); all.push(+m[1] * 100 + +m[2]) }
+  // prefer a "total" line (but not subtotal)
+  let total = 0
+  for (const l of lines) {
+    if (/sub\s*-?\s*total/i.test(l)) continue
+    if (/\b(total|amount due|balance due|grand total|total due)\b/i.test(l)) {
+      const hits = [...l.matchAll(amtReG)]
+      if (hits.length) { const c = +hits.at(-1)[1] * 100 + +hits.at(-1)[2]; if (c > total) total = c }
+    }
+  }
+  if (!total && all.length) total = Math.max(...all)
+  // merchant: first line that's mostly letters and not an amount/date
+  let merchant = ''
+  for (const l of lines) {
+    if (amtRe.test(l) || /\d{1,2}[/-]\d{1,2}/.test(l)) continue
+    if (/[a-zA-Z]{3,}/.test(l) && l.length <= 32) { merchant = l; break }
+  }
+  merchant = merchant.replace(/[^\w &'-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40)
+  if (merchant) merchant = merchant.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+  return { amount: total, merchant }
+}

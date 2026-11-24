@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { computeNets, simplify, splitsFromDraft, toCents, money } from './split.js'
+import { computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -32,6 +32,7 @@ const Ic = {
   edit: () => <Svg width="16" height="16"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" /></Svg>,
   exit: () => <Svg width="17" height="17"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5M21 12H9" /></Svg>,
   download: () => <Svg width="17" height="17"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5M12 15V3" /></Svg>,
+  camera: () => <Svg width="18" height="18"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></Svg>,
 }
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
@@ -486,9 +487,28 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const [vals, setVals] = useState(() => { const v = {}; if (edit && editSplits) editSplits.forEach(s => { v[s.member_id] = s.owed_cents }); return v })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [scan, setScan] = useState(0) // 0 idle, 1..100 progress
+  const [preview, setPreview] = useState(null)
+  const fileRef = useRef(null)
   const cur = group.currency
   const amt = toCents(amount)
   const myName = displayName(user)
+
+  async function onReceipt(e) {
+    const f = e.target.files?.[0]; if (!f) return
+    setErr(''); setPreview(URL.createObjectURL(f)); setScan(1)
+    try {
+      const Tesseract = (await import('tesseract.js')).default
+      const { data } = await Tesseract.recognize(f, 'eng', {
+        logger: m => { if (m.status === 'recognizing text') setScan(Math.max(1, Math.round(m.progress * 100))) },
+      })
+      const parsed = parseReceipt(data.text)
+      if (parsed.amount) setAmount((parsed.amount / 100).toFixed(2))
+      if (parsed.merchant) setDesc(d => d || parsed.merchant)
+      if (!parsed.amount) setErr('Couldn’t read a total — type it in')
+    } catch { setErr('Couldn’t scan that image — enter it manually') }
+    finally { setScan(0) }
+  }
 
   const toggle = id => setPicks(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id])
   const setVal = (id, v) => setVals(s => ({ ...s, [id]: type === 'exact' ? toCents(v) : (parseFloat(v) || 0) }))
@@ -521,6 +541,17 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
 
   return (
     <Sheet title={edit ? 'Edit expense' : 'Add expense'} onClose={onClose}>
+      {!edit && <div className="scanbox">
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onReceipt} />
+        {preview && <img className="scan-thumb" src={preview} alt="receipt" />}
+        <div className="grow">
+          <button type="button" className="btn ghost sm" onClick={() => fileRef.current?.click()} disabled={scan > 0}>
+            <Ic.camera /> {scan > 0 ? `Reading… ${scan}%` : preview ? 'Rescan receipt' : 'Scan a receipt'}
+          </button>
+          <div className="tiny faint" style={{ marginTop: 6 }}>Auto-fills the amount and name from a photo.</div>
+          {scan > 0 && <div className="bar" style={{ marginTop: 8 }}><div className="bar-fill" style={{ transform: `scaleX(${scan / 100})` }} /></div>}
+        </div>
+      </div>}
       <label className="fld"><span>Description</span><input className="inp" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Dinner" autoFocus /></label>
       <div className="two">
         <label className="fld"><span>Amount ({cur})</span><input className="inp" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></label>
@@ -653,6 +684,12 @@ function ActivityTab({ activity, expenses, cur, members }) {
   const byPayer = {}
   expenses.forEach(e => { byPayer[e.paid_by] = (byPayer[e.paid_by] || 0) + e.amount_cents })
   const payerData = Object.entries(byPayer).map(([id, value]) => ({ name: nameOf(members, id), value })).sort((a, b) => b.value - a.value)
+  const count = expenses.length
+  const avg = count ? Math.round(total / count) : 0
+  const topCat = catData[0]
+  const byDay = {}
+  expenses.forEach(e => { if (e.spent_on) byDay[e.spent_on] = (byDay[e.spent_on] || 0) + e.amount_cents })
+  const timeData = Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)).map(([d, v]) => ({ date: fmtDate(d), value: v }))
 
   const css = getComputedStyle(document.documentElement)
   const axis = css.getPropertyValue('--muted').trim() || '#888'
@@ -671,7 +708,32 @@ function ActivityTab({ activity, expenses, cur, members }) {
   return (
     <>
       {total > 0 ? <>
-        <div className="eyebrow between">Spending by category
+        <div className="stats">
+          <div className="stat"><div className="stat-num num">{money(total, cur)}</div><div className="stat-lbl">total spent</div></div>
+          <div className="stat"><div className="stat-num num">{count}</div><div className="stat-lbl">expenses</div></div>
+          <div className="stat"><div className="stat-num num">{money(avg, cur)}</div><div className="stat-lbl">avg / expense</div></div>
+          <div className="stat"><div className="stat-num">{CATS[topCat?.name] || '🧾'} {topCat?.name || '—'}</div><div className="stat-lbl">top category</div></div>
+        </div>
+
+        {timeData.length >= 2 && <>
+          <div className="eyebrow mt">Spending over time</div>
+          <div className="card pad">
+            <ResponsiveContainer width="100%" height={180}>
+              <AreaChart data={timeData} margin={{ left: 0, right: 8, top: 6, bottom: 0 }}>
+                <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={accent} stopOpacity={0.35} /><stop offset="100%" stopColor={accent} stopOpacity={0} />
+                </linearGradient></defs>
+                <CartesianGrid vertical={false} stroke={axis} strokeOpacity={0.15} />
+                <XAxis dataKey="date" tick={{ fill: axis, fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
+                <Area type="monotone" dataKey="value" stroke={accent} strokeWidth={2} fill="url(#g)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </>}
+
+        <div className="eyebrow between mt">Spending by category
           <button className="linklike" onClick={exportCsv}><Ic.download /> Export CSV</button></div>
         <div className="card pad">
           <div className="donut-wrap">
