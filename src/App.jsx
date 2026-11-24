@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, nextDate, filterExpenses } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, nextDate, filterExpenses } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -38,7 +38,17 @@ const Ic = {
   home: () => <Svg><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></Svg>,
   pulse: () => <Svg><path d="M3 12h4l3 8 4-16 3 8h4" /></Svg>,
   user: () => <Svg><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></Svg>,
+  plus: () => <Svg><path d="M12 5v14M5 12h14" /></Svg>,
+  userPlus: () => <Svg><circle cx="10" cy="8" r="4" /><path d="M2 21c0-4 4-6 8-6s8 2 8 6M19 4v6M16 7h6" /></Svg>,
+  ticket: () => <Svg><path d="M3 9a3 3 0 0 0 0 6v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a3 3 0 0 1 0-6V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z" /><path d="M14 5v14" strokeDasharray="2 2" /></Svg>,
 }
+// [mode, tab label, one-line explanation]
+const SPLIT_MODES = [
+  ['equal', 'Equally', 'Everyone ticked pays the same. Tap a person to leave them out.'],
+  ['exact', 'Amounts', 'Type exactly how much each person owes.'],
+  ['percent', 'Percent', 'Give each person a share of the total, in %.'],
+  ['shares', 'Shares', 'Someone with 2 shares pays twice as much as someone with 1.'],
+]
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
 
@@ -257,28 +267,55 @@ function HomeTab({ user, onOpen }) {
   useEffect(() => { load() }, [])
 
   const first = displayName(user).split(/[\s@]/)[0]
-  const overall = (groups || []).reduce((s, g) => s + g.myNet, 0)
-  const currencies = [...new Set((groups || []).map(g => g.currency))]
+  const gs = groups || []
+  const overall = gs.reduce((s, g) => s + g.myNet, 0)
+  const owe = gs.reduce((s, g) => s + Math.max(0, -g.myNet), 0)
+  const owed = gs.reduce((s, g) => s + Math.max(0, g.myNet), 0)
+  const nOwe = gs.filter(g => g.myNet < 0).length, nOwed = gs.filter(g => g.myNet > 0).length
+  const currencies = [...new Set(gs.map(g => g.currency))]
   const oneCur = currencies.length === 1 ? currencies[0] : null
+  const where = n => n === 0 ? 'nothing outstanding' : `in ${n} ${n === 1 ? 'group' : 'groups'}`
 
   return (
     <main className="wrap">
-      <div className="home-hero">
+      <section className="dash" aria-label="Your balances">
         <div className="greet">Hi {first}</div>
-        {groups && groups.length > 0 && oneCur
-          ? <>
-            <div className={'bignum num ' + (overall > 0 ? 'pos' : overall < 0 ? 'neg' : '')}>
-              {overall === 0 ? 'All settled' : money(Math.abs(overall), oneCur)}</div>
-            <div className="sublabel muted">
-              {overall === 0 ? 'nothing outstanding across your groups' : overall > 0 ? 'owed to you across all groups' : 'you owe across all groups'}</div>
+        {groups === null ? <div className="dash-total muted">Loading…</div>
+          : !gs.length ? <>
+            <div className="dash-total">Welcome 👋</div>
+            <p className="dash-sub">Start a group or add a friend to split your first bill.</p>
           </>
-          : <div className="bignum">Welcome 👋</div>}
-      </div>
+          : !oneCur ? <>
+            <div className="dash-total">Your balances</div>
+            <p className="dash-sub">You use more than one currency, so each balance is shown with its group below.</p>
+          </>
+          : <>
+            <div className="dash-label">Total balance</div>
+            <div className={'dash-total num ' + (overall > 0 ? 'pos' : overall < 0 ? 'neg' : '')}>
+              {overall === 0 ? 'All settled up' : (overall > 0 ? '+' : '−') + money(Math.abs(overall), oneCur)}</div>
+            <p className="dash-sub">{overall === 0 ? 'Nobody owes anybody. Nice.' : overall > 0 ? 'Overall, you are owed money.' : 'Overall, you owe money.'}</p>
+            <div className="dash-split">
+              <div className="dash-col">
+                <div className="dash-k">You owe</div>
+                <div className={'dash-v num ' + (owe ? 'neg' : 'muted')}>{money(owe, oneCur)}</div>
+                <div className="dash-n">{where(nOwe)}</div>
+              </div>
+              <div className="dash-col">
+                <div className="dash-k">You are owed</div>
+                <div className={'dash-v num ' + (owed ? 'pos' : 'muted')}>{money(owed, oneCur)}</div>
+                <div className="dash-n">{where(nOwed)}</div>
+              </div>
+              {owe + owed > 0 && <div className="dash-bar" role="img" aria-label={`You owe ${money(owe, oneCur)}, you are owed ${money(owed, oneCur)}`}>
+                <span className="b-neg" style={{ flexGrow: owe }} /><span className="b-pos" style={{ flexGrow: owed }} />
+              </div>}
+            </div>
+          </>}
+      </section>
 
-      <div className="home-actions">
-        <button className="btn" onClick={() => setSheet('new')}>+ New group</button>
-        <button className="btn ghost" onClick={() => setSheet('friend')}>+ Add friend</button>
-        <button className="btn ghost" onClick={() => setSheet('join')}>Join by code</button>
+      <div className="quick">
+        <button className="qbtn primary" onClick={() => setSheet('new')}><Ic.plus /><span>New group</span></button>
+        <button className="qbtn" onClick={() => setSheet('friend')}><Ic.userPlus /><span>Add friend</span></button>
+        <button className="qbtn" onClick={() => setSheet('join')}><Ic.ticket /><span>Join group</span></button>
       </div>
 
       {oneCur && expenses.length > 0 && <>
@@ -453,6 +490,8 @@ function GroupView({ groupId, user, onBack }) {
         </div>
       </div>
 
+      {members.some(m => !m.user_id) && <div className="err" role="alert"><Ic.alert />
+        <span>Other members are hidden by Appwrite, so balances here can’t be worked out. In Appwrite Console → Auth → Security → Memberships privacy, turn on <b>User ID</b> and <b>Name</b>.</span></div>}
       <MyBalance net={nets[user.id] || 0} cur={cur} />
 
       <div className="eyebrow">Balances</div>
@@ -652,8 +691,10 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const [repeat, setRepeat] = useState(edit?.repeat || 'none')
   const [notes, setNotes] = useState(edit?.notes || '')
   const [type, setType] = useState(edit ? 'exact' : 'equal')
-  const [picks, setPicks] = useState(edit && editSplits?.length ? editSplits.map(s => s.member_id) : members.map(m => m.user_id))
-  const [vals, setVals] = useState(() => { const v = {}; if (edit && editSplits) editSplits.forEach(s => { v[s.member_id] = s.owed_cents }); return v })
+  // Track who is *left out* (not who is in), so members that load after the sheet opens are included by default.
+  const [out, setOut] = useState(() => edit && editSplits?.length ? members.map(m => m.user_id).filter(id => !editSplits.some(s => s.member_id === id)) : [])
+  // Raw text per person for the active mode: cents-as-text for exact, else a number (percent / shares).
+  const [txt, setTxt] = useState(() => Object.fromEntries((edit && editSplits || []).map(s => [s.member_id, (s.owed_cents / 100).toFixed(2)])))
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [scan, setScan] = useState(0) // 0 idle, 1..100 progress
@@ -679,26 +720,43 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     finally { setScan(0) }
   }
 
-  const toggle = id => setPicks(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id])
-  const setVal = (id, v) => setVals(s => ({ ...s, [id]: type === 'exact' ? toCents(v) : (parseFloat(v) || 0) }))
+  const picks = members.map(m => m.user_id).filter(id => !out.includes(id))
+  const toggle = id => setOut(o => o.includes(id) ? o.filter(x => x !== id) : [...o, id])
+  const vals = Object.fromEntries(picks.map(id => [id, type === 'exact' ? toCents(txt[id]) : (parseFloat(txt[id]) || 0)]))
+  const owed = picks.length ? splitsFromDraft({ amount: amt, type, picks, vals, payer: paidBy }) : {}
+  const nice = n => String(+n.toFixed(2))
 
-  let remain = null
-  if (type === 'equal') remain = { ok: picks.length > 0, text: `${money(picks.length ? Math.round(amt / picks.length) : 0, cur)} each` }
-  else {
-    const sum = picks.reduce((s, id) => s + (vals[id] || 0), 0)
-    if (type === 'exact') remain = { ok: sum === amt && amt > 0, text: `${money(sum, cur)} of ${money(amt, cur)}${sum === amt ? ' ✓' : ` (${money(amt - sum, cur)} left)`}` }
-    else if (type === 'percent') remain = { ok: Math.abs(sum - 100) < 0.001, text: `${sum.toFixed(1)}%${Math.abs(sum - 100) < 0.001 ? ' ✓' : ''}` }
-    else remain = { ok: sum > 0, text: `${sum} shares` }
+  // Switching mode starts from an even split the person can then adjust.
+  function pickType(t) {
+    setType(t)
+    const even = n => allocate(n, picks.map(id => ({ id, w: 1 })), paidBy)
+    if (t === 'exact') setTxt(Object.fromEntries(Object.entries(even(amt)).map(([id, c]) => [id, (c / 100).toFixed(2)])))
+    if (t === 'percent') setTxt(Object.fromEntries(Object.entries(even(10000)).map(([id, c]) => [id, nice(c / 100)])))
+    if (t === 'shares') setTxt(Object.fromEntries(picks.map(id => [id, '1'])))
   }
+
+  let remain
+  const sum = picks.reduce((s, id) => s + vals[id], 0)
+  if (!picks.length) remain = { ok: false, text: 'Tap at least one person to split with' }
+  else if (type === 'equal') remain = { ok: true, text: `${money(Math.round(amt / picks.length), cur)} each · ${picks.length} ${picks.length === 1 ? 'person' : 'people'}` }
+  else if (type === 'exact') {
+    const diff = amt - sum
+    remain = { ok: diff === 0 && amt > 0, text: amt === 0 ? 'Enter the total first' : diff === 0 ? `Adds up to ${money(amt, cur)}` : diff > 0 ? `${money(diff, cur)} left to assign` : `${money(-diff, cur)} too much` }
+  } else if (type === 'percent') {
+    const diff = 100 - sum
+    remain = { ok: Math.abs(diff) < 0.001, text: Math.abs(diff) < 0.001 ? 'Adds up to 100%' : diff > 0 ? `${nice(diff)}% left to assign` : `${nice(-diff)}% too much` }
+  } else remain = { ok: sum > 0, text: sum > 0 ? `${nice(sum)} ${sum === 1 ? 'share' : 'shares'} · ${money(Math.round(amt / sum), cur)} per share` : 'Give someone at least one share' }
+  const status = remain.ok ? 'ok' : amt === 0 && type !== 'equal' ? '' : 'bad'
 
   async function save() {
     setErr('')
     if (!desc.trim()) return setErr('Add a description')
     if (amt <= 0) return setErr('Enter an amount')
     if (!picks.length) return setErr('Pick who shares this')
+    // Appwrite membership privacy can blank other members' IDs; saving would merge them into one person.
+    if (picks.some(id => !id) || !paidBy) return setErr('Can’t see who’s in this group yet. In Appwrite Console → Auth → Security → Memberships privacy, turn on User ID and Name, then reload.')
     if (!remain.ok) return setErr('Split does not add up yet')
     setBusy(true)
-    const owed = splitsFromDraft({ amount: amt, type, picks, vals, payer: paidBy })
     // only send optional fields that are set (or being cleared) so old backends keep working
     const extra = {}
     if (notes.trim() || edit?.notes) extra.notes = notes.trim()
@@ -729,12 +787,53 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
         </div>
       </div>}
       <label className="fld"><span>Description</span><input className="inp" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Dinner" autoFocus /></label>
-      <div className="two">
-        <label className="fld"><span>Amount ({cur})</span><input className="inp" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></label>
-        <label className="fld"><span>Paid by</span>
-          <select className="inp" value={paidBy} onChange={e => setPaidBy(e.target.value)}>
-            {members.map(m => <option key={m.user_id} value={m.user_id}>{m.display_name}</option>)}</select></label>
-      </div>
+      <label className="fld"><span>Total</span>
+        <div className="amt-field"><span className="amt-cur" aria-hidden="true">{cur}</span>
+          <input className="inp amt-inp num" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></div></label>
+
+      <section className="splitbox" aria-label="How to split">
+        <div className="paidby">
+          <span>Paid by</span>
+          <select className="chipsel" aria-label="Who paid" value={paidBy} onChange={e => setPaidBy(e.target.value)}>
+            {members.map(m => <option key={m.user_id} value={m.user_id}>{m.user_id === user.id ? 'you' : m.display_name}</option>)}</select>
+          <span>and split</span>
+        </div>
+        <div className="seg" role="tablist" aria-label="Split method">
+          {SPLIT_MODES.map(([t, label]) =>
+            <button key={t} type="button" role="tab" aria-selected={type === t} onClick={() => pickType(t)}>{label}</button>)}
+        </div>
+        <p className="split-hint">{SPLIT_MODES.find(([t]) => t === type)[2]}</p>
+
+        <div className="people">
+          {members.map(m => {
+            const id = m.user_id, inc = !out.includes(id), name = id === user.id ? 'You' : m.display_name
+            return (
+              <div className={'prow' + (inc ? '' : ' off')} key={id}>
+                <button type="button" className="ptoggle" aria-pressed={inc} onClick={() => toggle(id)}
+                  title={inc ? `Leave ${name} out` : `Include ${name}`}>
+                  <span className="tick" aria-hidden="true">{inc && <Ic.check />}</span>
+                  <Avatar members={members} id={id} />
+                  <span className="pname">{name}
+                    {inc && (type === 'percent' || type === 'shares') && <small className="num">{money(owed[id] || 0, cur)}</small>}
+                    {!inc && <small>not in this expense</small>}
+                  </span>
+                </button>
+                {inc && (type === 'equal'
+                  ? <span className="pshare num">{money(owed[id] || 0, cur)}</span>
+                  : <label className="pinput">
+                    {type === 'exact' && <span className="aff">{cur}</span>}
+                    <input inputMode="decimal" className="num" value={txt[id] ?? ''} onChange={e => setTxt(s => ({ ...s, [id]: e.target.value }))}
+                      aria-label={`${name}: ${type === 'exact' ? 'amount' : type}`} placeholder={type === 'exact' ? '0.00' : type === 'percent' ? '0' : '1'} />
+                    {type === 'percent' && <span className="aff">%</span>}
+                    {type === 'shares' && <span className="aff">sh</span>}
+                  </label>)}
+              </div>
+            )
+          })}
+        </div>
+        <div className={'remain ' + status} role="status">{remain.ok && <Ic.check />}<span>{remain.text}</span></div>
+      </section>
+
       <div className="two">
         <label className="fld"><span>Category</span>
           <select className="inp" value={cat} onChange={e => setCat(e.target.value)}>
@@ -742,34 +841,15 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
         <label className="fld"><span>Date</span>
           <input className="inp" type="date" value={date} max={todayISO()} onChange={e => setDate(e.target.value)} /></label>
       </div>
-      <div className="two">
+      <details className="more" open={!!(edit?.repeat || edit?.notes) || undefined}>
+        <summary>More options{repeat !== 'none' ? ` · repeats ${repeat}` : ''}{notes.trim() ? ' · note' : ''}</summary>
         <label className="fld"><span>Repeats</span>
           <select className="inp" value={repeat} onChange={e => setRepeat(e.target.value)}>
             <option value="none">Never</option><option value="weekly">Every week</option><option value="monthly">Every month</option></select></label>
-        <div className="fld tiny faint" style={{ alignSelf: 'end' }}>{repeat !== 'none' && `Next: ${fmtDate(nextDate(date, repeat))} — added automatically`}</div>
-      </div>
-      <label className="fld"><span>Notes (optional)</span>
-        <textarea className="inp" rows={2} maxLength={1000} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Anything to remember…" /></label>
-
-      <div className="eyebrow">Split</div>
-      <div className="seg">
-        {[['equal', '='], ['exact', '123'], ['percent', '%'], ['shares', '⚖']].map(([t, l]) =>
-          <button key={t} aria-selected={type === t} onClick={() => setType(t)}>{l}</button>)}
-      </div>
-      <div className="members">
-        {members.map(m => (
-          <div className="mrow" key={m.user_id}>
-            <input type="checkbox" checked={picks.includes(m.user_id)} onChange={() => toggle(m.user_id)} />
-            <Avatar members={members} id={m.user_id} />
-            <div className="grow">{m.display_name}</div>
-            {type !== 'equal' && picks.includes(m.user_id) &&
-              <input className="inp val" inputMode="decimal" defaultValue={type === 'exact' && vals[m.user_id] ? (vals[m.user_id] / 100).toFixed(2) : (vals[m.user_id] || '')}
-                placeholder={type === 'percent' ? '%' : type === 'shares' ? 'shares' : cur} onChange={e => setVal(m.user_id, e.target.value)} />}
-          </div>
-        ))}
-      </div>
-
-      <div className={'remain ' + (remain.ok ? 'ok' : 'bad')}><span>Split</span><span>{remain.text}</span></div>
+        {repeat !== 'none' && <p className="split-hint" style={{ marginTop: -8 }}>Next one on {fmtDate(nextDate(date, repeat))}, added automatically.</p>}
+        <label className="fld"><span>Notes</span>
+          <textarea className="inp" rows={2} maxLength={1000} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Anything to remember…" /></label>
+      </details>
       {err && <div className="err"><Ic.alert />{err}</div>}
       <button className="btn block" onClick={save} disabled={busy}>{busy ? 'Saving…' : edit ? 'Save changes' : 'Save expense'}</button>
     </Sheet>
