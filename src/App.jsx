@@ -201,10 +201,27 @@ function Home({ user, onOpen }) {
   useEffect(() => { load() }, [])
 
   const myName = displayName(user)
+  const first = myName.split(/[\s@]/)[0]
+  const overall = (groups || []).reduce((s, g) => s + g.myNet, 0)
+  const currencies = [...new Set((groups || []).map(g => g.currency))]
+  const oneCur = currencies.length === 1 ? currencies[0] : null
 
   return (
     <main className="wrap">
-      <div className="eyebrow mt">Your groups</div>
+      <div className="home-hero">
+        <div className="greet">Hi {first}</div>
+        {groups && groups.length > 0 && oneCur
+          ? <>
+            <div className={'bignum num ' + (overall > 0 ? 'pos' : overall < 0 ? 'neg' : '')}>
+              {overall === 0 ? 'All settled' : money(Math.abs(overall), oneCur)}
+            </div>
+            <div className="sublabel muted">
+              {overall === 0 ? 'nothing outstanding across your groups' : overall > 0 ? 'owed to you across all groups' : 'you owe across all groups'}
+            </div>
+          </>
+          : <div className="bignum">Welcome 👋</div>}
+      </div>
+      <div className="eyebrow">Your groups</div>
       {groups === null ? <div className="muted pad">Loading…</div>
         : groups.length === 0 ? <div className="empty"><div className="big">🧾</div>No groups yet.<br />Create one or join with a code.</div>
           : <div className="card list">
@@ -388,12 +405,11 @@ function GroupView({ groupId, user, onBack }) {
 }
 
 function MyBalance({ net, cur }) {
-  if (net === 0) return <div className="mybal settled">You’re all settled up 🎉</div>
-  const owed = net > 0
+  const owed = net > 0, owe = net < 0
   return (
-    <div className={'mybal ' + (owed ? 'owed' : 'owe')}>
-      <span className="mybal-label">{owed ? 'Overall, you are owed' : 'Overall, you owe'}</span>
-      <b className="num mybal-amt">{money(Math.abs(net), cur)}</b>
+    <div className="mybal">
+      <div className="mybal-label">{net === 0 ? 'Your balance' : owed ? 'Overall, you are owed' : 'Overall, you owe'}</div>
+      <div className={'bignum num ' + (owed ? 'pos' : owe ? 'neg' : '')}>{net === 0 ? 'All settled' : money(Math.abs(net), cur)}</div>
     </div>
   )
 }
