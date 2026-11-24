@@ -390,6 +390,7 @@ function GroupView({ groupId, user, onBack }) {
         <div className="ghead-actions">
           {group.join_code && <CodeChip code={group.join_code} />}
           <button className="btn ghost sm" onClick={() => setSheet('people')}>+ Add people</button>
+          <button className="btn ghost sm" onClick={() => setSheet('people')}>Settings</button>
         </div>
       </div>
 
@@ -468,8 +469,9 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
   const [busy, setBusy] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
   const myName = displayName(user)
-  const isCreator = group.created_by === user.id
   const myMembership = members.find(m => m.user_id === user.id)
+  // Team owners can delete too: covers groups whose created_by predates the Appwrite migration.
+  const isCreator = group.created_by === user.id || !!myMembership?.roles.includes('owner')
 
   async function invite(e) {
     e.preventDefault(); setErr(''); setMsg(''); setBusy(true)
@@ -488,7 +490,7 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
   }
 
   return (
-    <Sheet title="People" onClose={onClose}>
+    <Sheet title="People & settings" onClose={onClose}>
       {group.join_code && <>
         <div className="note">Share this code — people tap “Join by code” to join instantly.</div>
         <div className="codebig">{group.join_code}</div>
@@ -521,6 +523,7 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
         {isCreator && (confirmDel
           ? <button className="btn danger block" onClick={del}>Tap again to permanently delete “{group.name}”</button>
           : <button className="btn ghost block danger-text" onClick={() => setConfirmDel(true)}><Ic.trash /> Delete group</button>)}
+        {!isCreator && <div className="note">Only the group owner can delete this group.</div>}
       </div>
     </Sheet>
   )

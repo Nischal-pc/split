@@ -111,7 +111,7 @@ export async function listMembers(teamId) {
   const res = await teams.listMemberships(teamId)
   return res.memberships.map(m => ({
     user_id: m.userId, display_name: m.userName || m.userEmail || 'Member',
-    membership_id: m.$id, confirmed: m.confirm,
+    membership_id: m.$id, confirmed: m.confirm, roles: m.roles || [],
   }))
 }
 export async function inviteByEmail(teamId, email) {
