@@ -130,9 +130,29 @@ export async function deleteGroup(group) {
 }
 
 /* ---------- members (team memberships) ---------- */
+// Appwrite Cloud returns an empty userId for everyone but you, so fill the gaps from the
+// server function. membershipId -> userId never changes, so answers are cached on the device.
+const MID_KEY = 'splitit.memberIds'
+async function fillUserIds(teamId, memberships) {
+  if (!memberships.some(m => !m.userId)) return memberships
+  let cache = {}
+  try { cache = JSON.parse(localStorage.getItem(MID_KEY) || '{}') } catch { /* ignore */ }
+  if (memberships.some(m => !m.userId && !cache[m.$id])) {
+    try {
+      const ex = await functions.createExecution('join-by-code', JSON.stringify({ action: 'members', teamId }), false)
+      const r = JSON.parse(ex.responseBody || '{}')
+      if (r.ok) {
+        r.members.forEach(x => { if (x.user_id) cache[x.membership_id] = x.user_id })
+        localStorage.setItem(MID_KEY, JSON.stringify(cache))
+      }
+    } catch { /* leave blanks; the UI warns and blocks saving */ }
+  }
+  return memberships.map(m => m.userId ? m : { ...m, userId: cache[m.$id] || '' })
+}
+
 export async function listMembers(teamId) {
   const res = await teams.listMemberships(teamId)
-  return res.memberships.map(m => ({
+  return (await fillUserIds(teamId, res.memberships)).map(m => ({
     user_id: m.userId, display_name: m.userName || m.userEmail || 'Member',
     membership_id: m.$id, confirmed: m.confirm, roles: m.roles || [],
   }))

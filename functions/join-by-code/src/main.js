@@ -17,6 +17,23 @@ export default async ({ req, res, log, error }) => {
 
   let body = {}
   try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) } catch { /* ignore */ }
+
+  // Appwrite Cloud hides other members' userId from client SDKs (no Console switch for it).
+  // Return membershipId -> userId for a team, but only to someone who is in that team.
+  if (body.action === 'members') {
+    const teamId = String(body.teamId || '')
+    if (!teamId) return res.json({ ok: false, error: 'Missing team' }, 400)
+    try {
+      const mine = await teams.listMemberships(teamId, [Query.equal('userId', userId), Query.limit(1)])
+      if (!mine.total) return res.json({ ok: false, error: 'Not a member of this group' }, 403)
+      const all = await teams.listMemberships(teamId, [Query.limit(100)])
+      return res.json({ ok: true, members: all.memberships.map(m => ({ membership_id: m.$id, user_id: m.userId })) })
+    } catch (e) {
+      error(e.message)
+      return res.json({ ok: false, error: 'Could not load members' }, 500)
+    }
+  }
+
   const code = String(body.code || '').trim().toUpperCase()
   const name = String(body.name || 'Member').slice(0, 128)
   if (!code) return res.json({ ok: false, error: 'Enter a code' }, 400)
