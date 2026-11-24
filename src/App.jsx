@@ -35,6 +35,9 @@ const Ic = {
   camera: () => <Svg width="18" height="18"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></Svg>,
   copy: () => <Svg width="15" height="15"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></Svg>,
   check: () => <Svg width="15" height="15"><path d="M20 6 9 17l-5-5" /></Svg>,
+  home: () => <Svg><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></Svg>,
+  pulse: () => <Svg><path d="M3 12h4l3 8 4-16 3 8h4" /></Svg>,
+  user: () => <Svg><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></Svg>,
 }
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
@@ -53,20 +56,16 @@ export default function App() {
   useEffect(() => { boot() }, [])
   const onAuthed = async () => { await db.acceptInviteFromUrl().catch(() => {}); setUser(await db.getUser()) }
 
+  const signOut = async () => { await db.signOut(); setGroupId(null); setUser(null) }
+
   if (user === undefined) return <div className="center">Loading…</div>
   if (recovery) return <ResetPassword rec={recovery} onDone={() => setRecovery(null)} />
   if (!user) return <Auth onAuthed={onAuthed} />
-  return (
-    <>
-      <Header onSignOut={async () => { await db.signOut(); setGroupId(null); setUser(null) }} />
-      {groupId
-        ? <GroupView groupId={groupId} user={user} onBack={() => setGroupId(null)} />
-        : <Home user={user} onOpen={setGroupId} />}
-    </>
-  )
+  if (groupId) return <><Header /><GroupView groupId={groupId} user={user} onBack={() => setGroupId(null)} /></>
+  return <Shell user={user} onOpen={setGroupId} onSignOut={signOut} />
 }
 
-function Header({ onSignOut }) {
+function Header() {
   const toggleTheme = () => {
     const cur = document.documentElement.getAttribute('data-theme')
     const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches
@@ -77,9 +76,73 @@ function Header({ onSignOut }) {
       <div className="bar">
         <h1><span className="logo">S</span>SplitIt</h1>
         <button className="icon-btn" title="Toggle theme" aria-label="Toggle theme" onClick={toggleTheme}><Ic.moon /></button>
-        <button className="icon-btn" title="Sign out" aria-label="Sign out" onClick={onSignOut}><Ic.logout /></button>
       </div>
     </header>
+  )
+}
+
+/* ---------------- Shell with bottom-tab navigation ---------------- */
+function Shell({ user, onOpen, onSignOut }) {
+  const [tab, setTab] = useState('home')
+  return (
+    <>
+      <Header />
+      {tab === 'home' && <HomeTab user={user} onOpen={onOpen} />}
+      {tab === 'activity' && <GlobalActivity user={user} />}
+      {tab === 'account' && <AccountTab user={user} onSignOut={onSignOut} />}
+      <nav className="tabbar">
+        {[['home', 'Home', Ic.home], ['activity', 'Activity', Ic.pulse], ['account', 'Account', Ic.user]].map(([id, label, Icon]) => (
+          <button key={id} className={'tabitem' + (tab === id ? ' on' : '')} aria-selected={tab === id} onClick={() => setTab(id)}>
+            <Icon /><span>{label}</span>
+          </button>
+        ))}
+      </nav>
+    </>
+  )
+}
+
+function GlobalActivity({ user }) {
+  const [items, setItems] = useState(null)
+  const [names, setNames] = useState({})
+  useEffect(() => { (async () => {
+    const [act, groups] = await Promise.all([db.listRecentActivity(40).catch(() => []), db.listGroups(user.id).catch(() => [])])
+    setNames(Object.fromEntries(groups.map(g => [g.id, g.name]))); setItems(act)
+  })() }, [])
+  return (
+    <main className="wrap">
+      <div className="home-hero"><div className="greet">Activity</div><div className="sublabel muted">across all your groups</div></div>
+      {items === null ? <div className="muted pad">Loading…</div>
+        : items.length === 0 ? <div className="empty"><div className="big">📋</div>Nothing yet.<br />Add an expense or settle up to see activity here.</div>
+          : <div className="card list">
+            {items.map(a => (
+              <div className="row" key={a.id}>
+                <div className="grow"><b>{a.actor_name}</b> <span className="muted">{a.text}</span>{names[a.group_id] && <span className="faint tiny"> · {names[a.group_id]}</span>}</div>
+                <div className="tiny faint" style={{ flex: 'none' }}>{timeAgo(a.created_at)}</div>
+              </div>
+            ))}
+          </div>}
+    </main>
+  )
+}
+
+function AccountTab({ user, onSignOut }) {
+  const toggleTheme = () => {
+    const cur = document.documentElement.getAttribute('data-theme')
+    const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches
+    document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark')
+  }
+  return (
+    <main className="wrap">
+      <div className="home-hero">
+        <div className="acct-avatar">{displayName(user).slice(0, 1).toUpperCase()}</div>
+        <div className="bignum" style={{ fontSize: '1.5rem' }}>{displayName(user)}</div>
+        <div className="sublabel muted">{user.email}</div>
+      </div>
+      <div className="card list">
+        <button className="row rowbtn" onClick={toggleTheme}><Ic.moon /><div className="grow">Toggle light / dark</div><div className="chev"><Ic.chev /></div></button>
+        <button className="row rowbtn" onClick={onSignOut}><Ic.logout /><div className="grow">Sign out</div><div className="chev"><Ic.chev /></div></button>
+      </div>
+    </main>
   )
 }
 
@@ -182,17 +245,16 @@ function ResetPassword({ rec, onDone }) {
 }
 
 /* ---------------- Home ---------------- */
-function Home({ user, onOpen }) {
+function HomeTab({ user, onOpen }) {
   const [groups, setGroups] = useState(null)
-  const [recent, setRecent] = useState([])
+  const [expenses, setExpenses] = useState([])
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
 
   async function load() {
     try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) }
-    try { setRecent(await db.listRecentActivity(15)) } catch { setRecent([]) }
+    try { setExpenses(await db.listAllExpenses()) } catch { setExpenses([]) }
   }
   useEffect(() => { load() }, [])
-  const gmap = Object.fromEntries((groups || []).map(g => [g.id, g.name]))
 
   const first = displayName(user).split(/[\s@]/)[0]
   const overall = (groups || []).reduce((s, g) => s + g.myNet, 0)
@@ -212,7 +274,18 @@ function Home({ user, onOpen }) {
           </>
           : <div className="bignum">Welcome 👋</div>}
       </div>
-      <div className="eyebrow">Your groups</div>
+
+      <div className="home-actions">
+        <button className="btn" onClick={() => setSheet('new')}>+ New group</button>
+        <button className="btn ghost" onClick={() => setSheet('join')}>Join by code</button>
+      </div>
+
+      {oneCur && expenses.length > 0 && <>
+        <div className="eyebrow mt">Your spending</div>
+        <Charts expenses={expenses} cur={oneCur} />
+      </>}
+
+      <div className="eyebrow mt">Your groups</div>
       {groups === null ? <div className="muted pad">Loading…</div>
         : groups.length === 0 ? <div className="empty"><div className="big">🧾</div>No groups yet.<br />Create one and invite your friends.</div>
           : <div className="card list">
@@ -227,23 +300,7 @@ function Home({ user, onOpen }) {
               </button>
             ))}
           </div>}
-      {recent.length > 0 && <>
-        <div className="eyebrow mt">Recent activity</div>
-        <div className="card list">
-          {recent.map(a => (
-            <div className="row" key={a.id}>
-              <div className="grow"><b>{a.actor_name}</b> <span className="muted">{a.text}</span>
-                {gmap[a.group_id] && <span className="faint tiny"> · {gmap[a.group_id]}</span>}</div>
-              <div className="tiny faint" style={{ flex: 'none' }}>{timeAgo(a.created_at)}</div>
-            </div>
-          ))}
-        </div>
-      </>}
 
-      <div className="actionbar">
-        <button className="btn ghost" onClick={() => setSheet('join')}>Join by code</button>
-        <button className="btn" onClick={() => setSheet('new')}>+ New group</button>
-      </div>
       {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
       {sheet === 'join' && <JoinGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
     </main>
@@ -373,7 +430,7 @@ function GroupView({ groupId, user, onBack }) {
       </div>
 
       {tab === 'expenses' && <ExpenseList members={members} expenses={expenses} splits={splits} cur={cur} me={user.id} onOpen={e => setSheet({ detail: e })} />}
-      {tab === 'activity' && <ActivityTab activity={activity} expenses={expenses} cur={cur} members={members} />}
+      {tab === 'activity' && <GroupActivityTab activity={activity} expenses={expenses} cur={cur} members={members} />}
       {tab === 'chat' && <Chat group={group} user={user} members={members} />}
 
       {tab === 'expenses' && (
@@ -705,20 +762,22 @@ function timeAgo(ts) {
   if (d < 86400) return Math.floor(d / 3600) + 'h ago'
   return Math.floor(d / 86400) + 'd ago'
 }
-function ActivityTab({ activity, expenses, cur, members }) {
+// Reusable chart block. Pass `members` to also show the "Who paid" bar.
+function Charts({ expenses, cur, members }) {
   const byCat = {}
   expenses.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount_cents })
   const catData = Object.entries(byCat).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value)
   const total = catData.reduce((s, c) => s + c.value, 0)
-  const byPayer = {}
-  expenses.forEach(e => { byPayer[e.paid_by] = (byPayer[e.paid_by] || 0) + e.amount_cents })
-  const payerData = Object.entries(byPayer).map(([id, value]) => ({ name: nameOf(members, id), value })).sort((a, b) => b.value - a.value)
   const count = expenses.length
   const avg = count ? Math.round(total / count) : 0
   const topCat = catData[0]
   const byDay = {}
   expenses.forEach(e => { if (e.spent_on) byDay[e.spent_on] = (byDay[e.spent_on] || 0) + e.amount_cents })
   const timeData = Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)).map(([d, v]) => ({ date: fmtDate(d), value: v }))
+  const showPayers = members && members.length > 0
+  const byPayer = {}
+  if (showPayers) expenses.forEach(e => { byPayer[e.paid_by] = (byPayer[e.paid_by] || 0) + e.amount_cents })
+  const payerData = Object.entries(byPayer).map(([id, value]) => ({ name: nameOf(members, id), value })).sort((a, b) => b.value - a.value)
 
   const css = getComputedStyle(document.documentElement)
   const axis = css.getPropertyValue('--muted').trim() || '#888'
@@ -734,59 +793,60 @@ function ActivityTab({ activity, expenses, cur, members }) {
     a.download = 'expenses.csv'; a.click(); URL.revokeObjectURL(a.href)
   }
 
+  if (total === 0) return <div className="empty">Add an expense to see spending charts.</div>
   return (
     <>
-      {total > 0 ? <>
-        <div className="stats">
-          <div className="stat"><div className="stat-num num">{money(total, cur)}</div><div className="stat-lbl">total spent</div></div>
-          <div className="stat"><div className="stat-num num">{count}</div><div className="stat-lbl">expenses</div></div>
-          <div className="stat"><div className="stat-num num">{money(avg, cur)}</div><div className="stat-lbl">avg / expense</div></div>
-          <div className="stat"><div className="stat-num">{CATS[topCat?.name] || '🧾'} {topCat?.name || '—'}</div><div className="stat-lbl">top category</div></div>
-        </div>
+      <div className="stats">
+        <div className="stat"><div className="stat-num num">{money(total, cur)}</div><div className="stat-lbl">total spent</div></div>
+        <div className="stat"><div className="stat-num num">{count}</div><div className="stat-lbl">expenses</div></div>
+        <div className="stat"><div className="stat-num num">{money(avg, cur)}</div><div className="stat-lbl">avg / expense</div></div>
+        <div className="stat"><div className="stat-num">{CATS[topCat?.name] || '🧾'} {topCat?.name || '—'}</div><div className="stat-lbl">top category</div></div>
+      </div>
 
-        {timeData.length >= 2 && <>
-          <div className="eyebrow mt">Spending over time</div>
-          <div className="card pad">
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={timeData} margin={{ left: 0, right: 8, top: 6, bottom: 0 }}>
-                <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={accent} stopOpacity={0.35} /><stop offset="100%" stopColor={accent} stopOpacity={0} />
-                </linearGradient></defs>
-                <CartesianGrid vertical={false} stroke={axis} strokeOpacity={0.15} />
-                <XAxis dataKey="date" tick={{ fill: axis, fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis hide />
-                <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
-                <Area type="monotone" dataKey="value" stroke={accent} strokeWidth={2} fill="url(#g)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </>}
-
-        <div className="eyebrow between mt">Spending by category
-          <button className="linklike" onClick={exportCsv}><Ic.download /> Export CSV</button></div>
+      {timeData.length >= 2 && <>
+        <div className="eyebrow mt">Spending over time</div>
         <div className="card pad">
-          <div className="donut-wrap">
-            <ResponsiveContainer width="100%" height={210}>
-              <PieChart>
-                <Pie data={catData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={2} stroke="none">
-                  {catData.map((d, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="donut-center"><div className="tiny muted">Total spent</div><div className="num donut-total">{money(total, cur)}</div></div>
-          </div>
-          <div className="legend">
-            {catData.map((d, i) => (
-              <div className="leg" key={d.name}>
-                <span className="dot" style={{ background: COLORS[i % COLORS.length] }} />
-                <span className="grow">{CATS[d.name] || '🧾'} {d.name}</span>
-                <span className="num">{money(d.value, cur)}</span>
-              </div>
-            ))}
-          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={timeData} margin={{ left: 0, right: 8, top: 6, bottom: 0 }}>
+              <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={accent} stopOpacity={0.35} /><stop offset="100%" stopColor={accent} stopOpacity={0} />
+              </linearGradient></defs>
+              <CartesianGrid vertical={false} stroke={axis} strokeOpacity={0.15} />
+              <XAxis dataKey="date" tick={{ fill: axis, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis hide />
+              <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
+              <Area type="monotone" dataKey="value" stroke={accent} strokeWidth={2} fill="url(#g)" />
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
+      </>}
 
+      <div className="eyebrow between mt">Spending by category
+        <button className="linklike" onClick={exportCsv}><Ic.download /> Export CSV</button></div>
+      <div className="card pad">
+        <div className="donut-wrap">
+          <ResponsiveContainer width="100%" height={210}>
+            <PieChart>
+              <Pie data={catData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={2} stroke="none">
+                {catData.map((d, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+              </Pie>
+              <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="donut-center"><div className="tiny muted">Total spent</div><div className="num donut-total">{money(total, cur)}</div></div>
+        </div>
+        <div className="legend">
+          {catData.map((d, i) => (
+            <div className="leg" key={d.name}>
+              <span className="dot" style={{ background: COLORS[i % COLORS.length] }} />
+              <span className="grow">{CATS[d.name] || '🧾'} {d.name}</span>
+              <span className="num">{money(d.value, cur)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {showPayers && <>
         <div className="eyebrow mt">Who paid</div>
         <div className="card pad">
           <ResponsiveContainer width="100%" height={Math.max(110, payerData.length * 48)}>
@@ -798,8 +858,15 @@ function ActivityTab({ activity, expenses, cur, members }) {
             </BarChart>
           </ResponsiveContainer>
         </div>
-      </> : <div className="empty">Add an expense to see spending charts.</div>}
+      </>}
+    </>
+  )
+}
 
+function GroupActivityTab({ activity, expenses, cur, members }) {
+  return (
+    <>
+      <Charts expenses={expenses} cur={cur} members={members} />
       <div className="eyebrow mt">Recent activity</div>
       {activity.length === 0
         ? <div className="empty">Activity appears here as people add expenses and settle up.</div>

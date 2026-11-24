@@ -91,6 +91,11 @@ export async function ensureJoinCode(group) {
   const code = genCode()
   try { await databases.updateDocument(DB, C.groups, group.id, { join_code: code }); return code } catch { return null }
 }
+// All expenses across the user's groups (for home charts).
+export async function listAllExpenses() {
+  const r = await databases.listDocuments(DB, C.expenses, [Query.orderDesc('$createdAt'), Query.limit(2000)])
+  return r.documents.map(norm)
+}
 // Recent activity across all the user's groups (RLS limits to groups they belong to).
 export async function listRecentActivity(limit = 20) {
   const r = await databases.listDocuments(DB, C.activity, [Query.orderDesc('$createdAt'), Query.limit(limit)])

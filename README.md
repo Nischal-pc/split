@@ -33,7 +33,9 @@ Inviting someone sends an Appwrite email with a join link back to this app. On *
 - `scripts/setup-appwrite.mjs` builds the whole backend; re-running it is safe (it skips things that already exist).
 
 ## Deploy free (optional)
-Push to GitHub → connect in Cloudflare Pages (build `npm run build`, output `dist`) → add the three `VITE_…` env vars there (not the API key) → add your `*.pages.dev` domain under Appwrite → Platforms.
+Push to GitHub, then on **Vercel**: New Project → import the repo (it auto-detects Vite: build `npm run build`, output `dist`). Add the three `VITE_…` env vars under Project → Settings → Environment Variables (NOT the API key). After the first deploy, add your `*.vercel.app` domain under Appwrite → Settings → Platforms → Web, or every browser call is blocked by CORS. For Google sign-in, also add that domain to the Google OAuth provider's redirect settings (Appwrite → Auth → Google) and to the authorized origins/redirects in Google Cloud Console.
+
+(Cloudflare Pages works the same way — build `npm run build`, output `dist`, add the three `VITE_…` vars, then add your `*.pages.dev` domain under Appwrite → Platforms.)
 
 ## Not yet built
 Receipt photos/OCR, recurring expenses, multi-currency conversion, push notifications.
