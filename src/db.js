@@ -1,5 +1,5 @@
 // All backend access lives here so the UI never touches Appwrite directly.
-import { ID, Query, Permission, Role } from 'appwrite'
+import { ID, Query, Permission, Role, OAuthProvider } from 'appwrite'
 import { client, account, databases, teams, DB, C } from './appwrite.js'
 
 const norm = d => ({ ...d, id: d.$id, created_at: d.$createdAt })
@@ -19,6 +19,10 @@ export async function signUp(email, password, name) {
   await account.createEmailPasswordSession(email, password)
 }
 export async function signIn(email, password) { await account.createEmailPasswordSession(email, password) }
+export function signInWithGoogle() {
+  // Full-page redirect to Google and back; the session is set on return.
+  account.createOAuth2Session(OAuthProvider.Google, window.location.origin, window.location.origin)
+}
 export async function signOut() { try { await account.deleteSession('current') } catch { /* ignore */ } }
 export async function recover(email) { await account.createRecovery(email, window.location.origin) }
 export async function confirmRecovery(userId, secret, password) { await account.updateRecovery(userId, secret, password) }

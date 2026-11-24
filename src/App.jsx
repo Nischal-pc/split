@@ -1,6 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis } from 'recharts'
 import * as db from './db.js'
 import { computeNets, simplify, splitsFromDraft, toCents, money } from './split.js'
+
+const GoogleG = () => (
+  <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+    <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z" />
+    <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+    <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.3 0-9.7-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+    <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z" />
+  </svg>
+)
 
 const CATS = { general: '🧾', food: '🍽️', transport: '🚕', home: '🏠', trip: '✈️', fun: '🎉', shopping: '🛍️' }
 const COLORS = ['#2f7d4f', '#c0492f', '#2b6fb0', '#9a5bbf', '#b8791f', '#1f998f', '#c0497f', '#5a6b2f']
@@ -107,6 +117,13 @@ function Auth({ onAuthed }) {
             <button className="link" onClick={() => go('login')}>Back to log in</button>
           </>
         ) : (
+          <>
+          {mode !== 'forgot' && (
+            <>
+              <button type="button" className="btn gbtn block" onClick={db.signInWithGoogle}><GoogleG /> Continue with Google</button>
+              <div className="divider"><span>or</span></div>
+            </>
+          )}
           <form onSubmit={submit}>
             {mode === 'signup' && (
               <label className="fld"><span>Your name</span>
@@ -125,6 +142,7 @@ function Auth({ onAuthed }) {
             {err && <div className="err"><Ic.alert />{err}</div>}
             <button className="btn block" disabled={busy}>{busy ? 'Please wait…' : cta}</button>
           </form>
+          </>
         )}
         {!sent && (
           <button className="link" onClick={() => go(mode === 'signup' ? 'login' : mode === 'forgot' ? 'login' : 'signup')}>
@@ -289,12 +307,12 @@ function GroupView({ groupId, user, onBack }) {
       </div>
 
       {suggestions.length > 0 && <>
-        <div className="eyebrow mt">Suggested payments</div>
+        <div className="eyebrow mt">Who owes who</div>
         <div className="card list">
           {suggestions.map((s, i) => (
             <div className="row" key={i}>
               <Avatar members={members} id={s.from} />
-              <div className="grow"><b>{nameOf(members, s.from)}</b> → <b>{nameOf(members, s.to)}</b></div>
+              <div className="grow"><b>{nameOf(members, s.from)}</b> owes <b>{nameOf(members, s.to)}</b></div>
               <div className="num">{money(s.amount, cur)}</div>
               <button className="btn sm" onClick={() => setSheet({ settle: s })}>Settle</button>
             </div>
@@ -309,7 +327,7 @@ function GroupView({ groupId, user, onBack }) {
       </div>
 
       {tab === 'expenses' && <ExpenseList members={members} expenses={expenses} splits={splits} cur={cur} me={user.id} onOpen={e => setSheet({ detail: e })} />}
-      {tab === 'activity' && <ActivityTab activity={activity} expenses={expenses} cur={cur} />}
+      {tab === 'activity' && <ActivityTab activity={activity} expenses={expenses} cur={cur} members={members} />}
       {tab === 'chat' && <Chat group={group} user={user} members={members} />}
 
       {tab === 'expenses' && (
@@ -600,12 +618,20 @@ function timeAgo(ts) {
   if (d < 86400) return Math.floor(d / 3600) + 'h ago'
   return Math.floor(d / 86400) + 'd ago'
 }
-function ActivityTab({ activity, expenses, cur }) {
+function ActivityTab({ activity, expenses, cur, members }) {
   const byCat = {}
   expenses.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount_cents })
-  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1])
-  const total = cats.reduce((s, c) => s + c[1], 0)
-  const max = cats.length ? cats[0][1] : 1
+  const catData = Object.entries(byCat).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value)
+  const total = catData.reduce((s, c) => s + c.value, 0)
+  const byPayer = {}
+  expenses.forEach(e => { byPayer[e.paid_by] = (byPayer[e.paid_by] || 0) + e.amount_cents })
+  const payerData = Object.entries(byPayer).map(([id, value]) => ({ name: nameOf(members, id), value })).sort((a, b) => b.value - a.value)
+
+  const css = getComputedStyle(document.documentElement)
+  const axis = css.getPropertyValue('--muted').trim() || '#888'
+  const accent = css.getPropertyValue('--accent').trim() || '#1f6b52'
+  const tip = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, color: 'var(--fg)', fontSize: 13 }
+
   function exportCsv() {
     const esc = v => '"' + String(v).replace(/"/g, '""') + '"'
     const lines = ['Date,Description,Category,Amount']
@@ -614,21 +640,48 @@ function ActivityTab({ activity, expenses, cur }) {
     a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }))
     a.download = 'expenses.csv'; a.click(); URL.revokeObjectURL(a.href)
   }
+
   return (
     <>
-      {total > 0 && <>
+      {total > 0 ? <>
         <div className="eyebrow between">Spending by category
           <button className="linklike" onClick={exportCsv}><Ic.download /> Export CSV</button></div>
-        <div className="card pad insights">
-          {cats.map(([c, amt]) => (
-            <div className="insight" key={c}>
-              <div className="insight-top"><span>{CATS[c] || '🧾'} {c}</span><span className="num">{money(amt, cur)}</span></div>
-              <div className="bar"><div className="bar-fill" style={{ transform: `scaleX(${max ? amt / max : 0})` }} /></div>
-            </div>
-          ))}
-          <div className="insight-total num">Total {money(total, cur)}</div>
+        <div className="card pad">
+          <div className="donut-wrap">
+            <ResponsiveContainer width="100%" height={210}>
+              <PieChart>
+                <Pie data={catData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={2} stroke="none">
+                  {catData.map((d, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                </Pie>
+                <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="donut-center"><div className="tiny muted">Total spent</div><div className="num donut-total">{money(total, cur)}</div></div>
+          </div>
+          <div className="legend">
+            {catData.map((d, i) => (
+              <div className="leg" key={d.name}>
+                <span className="dot" style={{ background: COLORS[i % COLORS.length] }} />
+                <span className="grow">{CATS[d.name] || '🧾'} {d.name}</span>
+                <span className="num">{money(d.value, cur)}</span>
+              </div>
+            ))}
+          </div>
         </div>
-      </>}
+
+        <div className="eyebrow mt">Who paid</div>
+        <div className="card pad">
+          <ResponsiveContainer width="100%" height={Math.max(110, payerData.length * 48)}>
+            <BarChart data={payerData} layout="vertical" margin={{ left: 0, right: 18, top: 2, bottom: 2 }}>
+              <XAxis type="number" hide />
+              <YAxis type="category" dataKey="name" width={84} tick={{ fill: axis, fontSize: 12 }} axisLine={false} tickLine={false} />
+              <Tooltip formatter={v => money(v, cur)} cursor={{ fill: 'transparent' }} contentStyle={tip} />
+              <Bar dataKey="value" fill={accent} radius={[0, 8, 8, 0]} barSize={22} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </> : <div className="empty">Add an expense to see spending charts.</div>}
+
       <div className="eyebrow mt">Recent activity</div>
       {activity.length === 0
         ? <div className="empty">Activity appears here as people add expenses and settle up.</div>
