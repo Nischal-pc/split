@@ -1,14 +1,12 @@
 import { Client, Account, Databases, Teams, Functions } from 'appwrite'
 
-const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT
-const project = import.meta.env.VITE_APPWRITE_PROJECT_ID
+// Public defaults so a plain `vercel build` works without env vars set.
+// Project id + endpoint are public (they ship in the client bundle); access is
+// gated by Appwrite's platform allowlist + auth, not by hiding these. Env vars override.
+const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT || 'https://tor.cloud.appwrite.io/v1'
+const project = import.meta.env.VITE_APPWRITE_PROJECT_ID || '6b04f8100011b3a5a776'
 
-if (!endpoint || !project) {
-  // eslint-disable-next-line no-console
-  console.error('Missing Appwrite env vars. Copy .env.example to .env, fill in endpoint + project id, then restart `npm run dev`.')
-}
-
-export const client = new Client().setEndpoint(endpoint || 'https://cloud.appwrite.io/v1').setProject(project || '')
+export const client = new Client().setEndpoint(endpoint).setProject(project)
 export const account = new Account(client)
 export const databases = new Databases(client)
 export const teams = new Teams(client)
