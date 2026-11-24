@@ -1,39 +1,39 @@
 # SplitIt
 
-A Splitwise-style expense splitter in React + Supabase, with **real multiuser sync** and **realtime group chat**. Everything stays on free tiers.
+A Splitwise-style expense splitter in **React + Appwrite**, with real multiuser, realtime sync and group chat. Wealthsimple-inspired design. Free tier all the way.
 
-Features: email/password auth · groups with shareable invite codes · expenses split four ways (equal / exact / percent / shares, leftover cents to the payer) · per-member balances · simplify-debts suggested payments · settle up · realtime chat per group · live sync across devices · dark mode.
+Features: email/password auth + forgot-password · groups (one per Appwrite Team) · invite people by email · four split types (equal / exact / percent / shares, leftover cents to the payer) · per-member balances · simplify-debts suggested payments · settle up · edit/delete expenses with dates · activity feed · per-expense comments · spending insights + CSV export · realtime chat & sync · light/dark.
 
-## Setup (one time, ~5 minutes)
+## Setup (one time)
 
-You need a free [Supabase](https://supabase.com) account. No credit card.
+You need a free [Appwrite Cloud](https://cloud.appwrite.io) account (or a self-hosted Appwrite). No card.
 
-1. **Create a Supabase project.** supabase.com → New project. Wait for it to finish provisioning.
-2. **Run the schema.** In the Supabase dashboard open **SQL Editor → New query**, paste the whole of [`supabase/schema.sql`](supabase/schema.sql), and click **Run**.
-3. **Add your keys.** In the project copy this folder's `.env.example` to `.env` and fill in:
-   - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` — from **Project Settings → API**.
-4. **Run it.**
+1. **Create a project.** cloud.appwrite.io → Create project. Copy its **Project ID** (Project Settings).
+2. **Create an API key.** Project → **Overview → API keys → Create** (or Integrations → API Keys). Give it scopes: `databases.read/write`, `collections.read/write`, `attributes.read/write`, `indexes.read/write`. Copy the key.
+3. **Fill `.env`.** Copy `.env.example` to `.env` and set:
+   - `VITE_APPWRITE_ENDPOINT` — `https://cloud.appwrite.io/v1` (or your self-hosted `/v1`)
+   - `VITE_APPWRITE_PROJECT_ID` — from step 1
+   - `APPWRITE_API_KEY` — from step 2
+4. **Provision + run:**
    ```
    npm install
+   npm run setup     # creates the database, collections, fields, indexes, permissions
    npm run dev
    ```
-   Open the printed `http://localhost:5173`. Sign up, create a group, and share its invite code with a friend (they sign up and "Join by code"). Open it on two devices to see live sync and chat.
+   Open the printed `http://localhost:5173`, sign up, create a group, and invite a friend by email.
 
-Check the money math anytime with `npm test`.
+5. **Add your app's web platform** so the browser SDK is allowed: Appwrite → Project → **Settings → Platforms → Add platform → Web**, hostname `localhost` (and later your deployed domain). Without this, the browser calls are blocked by CORS.
 
-## Email confirmation (so you can log in immediately in dev)
+### Invites & email
+Inviting someone sends an Appwrite email with a join link back to this app. On **Appwrite Cloud** email works out of the box. On **self-hosted**, configure SMTP first (Appwrite console → Messaging/SMTP), or invitees won't get the link.
 
-Supabase sends a confirmation email on sign-up by default. For testing, turn it off:
-**Authentication → Providers → Email → uncheck "Confirm email"**. Turn it back on (and add an SMTP provider) before inviting lots of people — the built-in email sender is rate-limited.
+## How it's structured
+- Each **group = an Appwrite Team**; members are team members. Every document (expense, split, settlement, message, activity, comment) is permissioned to that team, so only group members can read/write it — no server code needed.
+- `src/db.js` is the only file that talks to Appwrite. `src/App.jsx` is the UI. `src/split.js` is the money/balance engine (run `npm test`).
+- `scripts/setup-appwrite.mjs` builds the whole backend; re-running it is safe (it skips things that already exist).
 
 ## Deploy free (optional)
+Push to GitHub → connect in Cloudflare Pages (build `npm run build`, output `dist`) → add the three `VITE_…` env vars there (not the API key) → add your `*.pages.dev` domain under Appwrite → Platforms.
 
-Push to GitHub, connect the repo in **Cloudflare Pages** (build `npm run build`, output `dist`), and add the two `VITE_…` env vars there. You get a free `https://…pages.dev` URL you can add to your phone's home screen.
-
-## What's intentionally left out (add later, one feature at a time)
-
-Receipt photos/OCR, recurring expenses, multi-currency conversion, charts, CSV import/export, push notifications, offline queue, PWA install prompt. The schema and UI are structured so these slot in without a rewrite.
-
-## Note
-
-`splitit.html` in this folder is a separate, standalone single-file version that works offline with no backend (single device only). This React project is the real multiuser one.
+## Not yet built
+Receipt photos/OCR, recurring expenses, multi-currency conversion, push notifications.
