@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, nextDate, filterExpenses } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -49,6 +49,7 @@ const SPLIT_MODES = [
   ['exact', 'Amounts', 'Type exactly how much each person owes.'],
   ['percent', 'Percent', 'Give each person a share of the total, in %.'],
   ['shares', 'Shares', 'Someone with 2 shares pays twice as much as someone with 1.'],
+  ['items', 'Items', 'Add each item and tap who had it. Tax and tip are shared in proportion.'],
 ]
 // Splitwise-style one-tap choices: [id, title, detail]. `group` = more than one other person.
 function quickOptions({ name, n, amt, cur, group }) {
@@ -850,6 +851,8 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   // Track who is *left out* (not who is in), so members that load after the sheet opens are included by default.
   const [out, setOut] = useState(() => edit && editSplits?.length ? members.map(m => m.user_id).filter(id => !editSplits.some(s => s.member_id === id)) : def?.out || [])
   // Raw text per person for the active mode: cents-as-text for exact, else a number (percent / shares).
+  const [items, setItems] = useState([]) // itemized: [{ key, name, price, people }]
+  const [scanned, setScanned] = useState([]) // items read from a receipt photo
   const [txt, setTxt] = useState(() => def?.txt || Object.fromEntries((edit && editSplits || []).map(s => [s.member_id, (s.owed_cents / 100).toFixed(2)])))
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -872,6 +875,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
       if (parsed.amount) setAmount((parsed.amount / 100).toFixed(2))
       if (parsed.merchant) setDesc(d => d || parsed.merchant)
       if (!parsed.amount) setErr('Couldn’t read a total — type it in')
+      setScanned(parseReceiptItems(data.text))
     } catch { setErr('Couldn’t scan that image — enter it manually') }
     finally { setScan(0) }
   }
@@ -887,10 +891,17 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     theyOweFull: { P: user.id, T: 'equal', X: allIds.filter(id => id !== who) },
     iOweFull: { P: who, T: 'equal', X: allIds.filter(id => id !== user.id) },
   }[mode]
-  const picks = members.map(m => m.user_id).filter(id => !eff.X.includes(id))
+  const itemRes = eff.T === 'items' ? itemSplit(amt, items.map(i => ({ cents: toCents(i.price), people: i.people })), eff.P) : null
+  const picks = itemRes ? Object.keys(itemRes.owed) : members.map(m => m.user_id).filter(id => !eff.X.includes(id))
   const toggle = id => setOut(o => o.includes(id) ? o.filter(x => x !== id) : [...o, id])
   const vals = Object.fromEntries(picks.map(id => [id, eff.T === 'exact' ? toCents(txt[id]) : (parseFloat(txt[id]) || 0)]))
-  const owed = picks.length ? splitsFromDraft({ amount: amt, type: eff.T, picks, vals, payer: eff.P }) : {}
+  const owed = itemRes ? itemRes.owed : picks.length ? splitsFromDraft({ amount: amt, type: eff.T, picks, vals, payer: eff.P }) : {}
+  const newItem = (name = '', price = '') => ({ key: Math.random().toString(36).slice(2), name, price, people: allIds })
+  const setItem = (key, patch) => setItems(list => list.map(i => i.key === key ? { ...i, ...patch } : i))
+  function useScanned() {
+    setMode('custom'); setType('items')
+    setItems(scanned.map(x => newItem(x.name, (x.cents / 100).toFixed(2))))
+  }
   const nice = n => String(+n.toFixed(2))
 
   // Switching mode starts from an even split the person can then adjust.
@@ -900,11 +911,18 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     if (t === 'exact') setTxt(Object.fromEntries(Object.entries(even(amt)).map(([id, c]) => [id, (c / 100).toFixed(2)])))
     if (t === 'percent') setTxt(Object.fromEntries(Object.entries(even(10000)).map(([id, c]) => [id, nice(c / 100)])))
     if (t === 'shares') setTxt(Object.fromEntries(picks.map(id => [id, '1'])))
+    if (t === 'items' && !items.length) setItems([newItem()])
   }
 
   let remain
   const sum = picks.reduce((s, id) => s + vals[id], 0)
-  if (!picks.length) remain = { ok: false, text: 'Tap at least one person to split with' }
+  if (itemRes) {
+    const priced = items.filter(i => toCents(i.price) > 0), extra = amt - itemRes.itemsTotal
+    remain = !priced.length ? { ok: false, text: 'Add the items and their prices' }
+      : priced.some(i => !i.people.length) ? { ok: false, text: 'Tap who had each item' }
+      : extra < 0 ? { ok: false, text: `Items come to ${money(itemRes.itemsTotal, cur)}, more than the total` }
+      : { ok: true, text: `Items ${money(itemRes.itemsTotal, cur)}${extra ? ` + ${money(extra, cur)} tax/tip shared` : ''}` }
+  } else if (!picks.length) remain = { ok: false, text: 'Tap at least one person to split with' }
   else if (eff.T === 'equal') remain = { ok: true, text: `${money(Math.round(amt / picks.length), cur)} each · ${picks.length} ${picks.length === 1 ? 'person' : 'people'}` }
   else if (eff.T === 'exact') {
     const diff = amt - sum
@@ -936,7 +954,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
       if (edit) await db.updateExpense(group, edit.id, payload)
       else await db.addExpense(group, payload, user.id)
       // remember (or forget) this group's default split; amounts aren't reusable so 'exact' never becomes a default
-      const wantDef = !quick && saveDef && type !== 'exact'
+      const wantDef = !quick && saveDef && type !== 'exact' && type !== 'items'
       if (wantDef) await db.setDefaultSplit(group.id, { type, txt, out }).catch(() => {})
       else if (group.default_split && !quick) await db.setDefaultSplit(group.id, null).catch(() => {})
       logActivity(group, myName, `${edit ? 'edited' : 'added'} “${desc.trim()}” · ${money(amt, cur)}`)
@@ -954,6 +972,8 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
             <Ic.camera /> {scan > 0 ? `Reading… ${scan}%` : preview ? 'Rescan receipt' : 'Scan a receipt'}
           </button>
           <div className="tiny faint" style={{ marginTop: 6 }}>Auto-fills the amount and name from a photo.</div>
+          {scanned.length > 0 && scan === 0 && <button type="button" className="btn sm" style={{ marginTop: 10 }} onClick={useScanned}>
+            Split by item · {scanned.length} found</button>}
           {scan > 0 && <div className="bar" style={{ marginTop: 8 }}><div className="bar-fill" style={{ transform: `scaleX(${scan / 100})` }} /></div>}
         </div>
       </div>}
@@ -993,7 +1013,31 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
         </div>
         <p className="split-hint">{SPLIT_MODES.find(([t]) => t === type)[2]}</p>
 
-        <div className="people">
+        {type === 'items' ? <div className="items">
+          {items.map(it => (
+            <div className="item" key={it.key}>
+              <div className="item-top">
+                <input className="inp item-name" value={it.name} onChange={e => setItem(it.key, { name: e.target.value })} placeholder="Item" aria-label="Item name" />
+                <label className="pinput"><span className="aff">{cur}</span>
+                  <input inputMode="decimal" className="num" value={it.price} onChange={e => setItem(it.key, { price: e.target.value })} placeholder="0.00" aria-label={`${it.name || 'Item'} price`} /></label>
+                <button type="button" className="del" aria-label={`Remove ${it.name || 'item'}`} onClick={() => setItems(l => l.filter(x => x.key !== it.key))}><Ic.close /></button>
+              </div>
+              <div className="item-people" role="group" aria-label={`Who had ${it.name || 'this item'}`}>
+                {members.map(m => {
+                  const on = it.people.includes(m.user_id)
+                  return <button type="button" key={m.user_id} className="pchip" aria-pressed={on}
+                    onClick={() => setItem(it.key, { people: on ? it.people.filter(x => x !== m.user_id) : [...it.people, m.user_id] })}>
+                    {m.user_id === user.id ? 'You' : m.display_name}</button>
+                })}
+              </div>
+            </div>
+          ))}
+          <button type="button" className="btn ghost sm withicon" onClick={() => setItems(l => [...l, newItem()])}><Ic.plus />Add item</button>
+          {Object.keys(owed).length > 0 && <div className="item-sum">
+            {members.filter(m => owed[m.user_id]).map(m => <span key={m.user_id}>{m.user_id === user.id ? 'You' : m.display_name} <b className="num">{money(owed[m.user_id], cur)}</b></span>)}
+          </div>}
+        </div>
+        : <div className="people">
           {members.map(m => {
             const id = m.user_id, inc = !out.includes(id), name = id === user.id ? 'You' : m.display_name
             return (
@@ -1019,9 +1063,9 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
               </div>
             )
           })}
-        </div>
+        </div>}
         <div className={'remain ' + status} role="status">{remain.ok && <Ic.check />}<span>{remain.text}</span></div>
-        {type !== 'exact' && <label className="defchk"><input type="checkbox" checked={saveDef} onChange={e => setSaveDef(e.target.checked)} />
+        {type !== 'exact' && type !== 'items' && <label className="defchk"><input type="checkbox" checked={saveDef} onChange={e => setSaveDef(e.target.checked)} />
           <span>Use this split by default in {group.name}</span></label>}
         </>}
       </section>

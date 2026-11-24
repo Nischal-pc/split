@@ -1,6 +1,6 @@
 // Run with: npm test  (plain Node, no test framework)
 import assert from 'node:assert'
-import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems } from './split.js'
 
 // equal split of 10.00 among 3 -> 3.34/3.33/3.33, remainder to payer
 let a = allocate(1000, [{ id: 'x', w: 1 }, { id: 'y', w: 1 }, { id: 'z', w: 1 }], 'x')
@@ -63,4 +63,15 @@ const pb = peopleBalances('me', [g1, g2, g3])
 assert.equal(pb.length, 1) // € group is settled, maya owes sam not me
 assert.deepEqual([pb[0].user_id, pb[0].net, pb[0].cur, pb[0].groups], ['sam', 3000, '$', ['Roomies', 'Trip']]) // 40 owed - 10 owing
 
-console.log('ok — all split/balance/receipt/recurring/filter/people checks passed')
+// itemized split: pizza 20 shared a+b, beer 10 for b only, total 33 (3 tax) -> tax shared 1:2
+let it = itemSplit(3300, [{ cents: 2000, people: ['a', 'b'] }, { cents: 1000, people: ['b'] }], 'a')
+assert.ok(it.ok)
+assert.equal(it.owed.a + it.owed.b, 3300)
+assert.deepEqual(it.owed, { a: 1100, b: 2200 })
+assert.equal(itemSplit(2000, [{ cents: 2500, people: ['a'] }], 'a').ok, false) // items over total
+assert.equal(itemSplit(1000, [{ cents: 500, people: [] }], 'a').ok, false) // nobody assigned
+// receipt lines -> items
+const items = parseReceiptItems(["JOE'S DINER", '2 Burger 14.50', 'Fries 4.25', 'Subtotal 18.75', 'HST 2.44', 'TOTAL 21.19', 'VISA 21.19'].join('\n'))
+assert.deepEqual(items, [{ name: 'Burger', cents: 1450 }, { name: 'Fries', cents: 425 }])
+
+console.log('ok — all split/balance/receipt/recurring/filter/people/item checks passed')

@@ -125,3 +125,39 @@ export function peopleBalances(me, groups) {
   }
   return Object.values(acc).filter(p => p.net !== 0).sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
 }
+
+// Itemized split: each item's price is shared equally by the people who had it; whatever the
+// total has on top of the items (tax, tip) is shared in proportion to each person's items.
+// items: [{ cents, people: [ids] }]. Returns { owed: {id: cents}, itemsTotal, ok }.
+export function itemSplit(amount, items, payer) {
+  const owed = {}
+  let itemsTotal = 0
+  for (const it of items) {
+    if (!(it.cents > 0) || !it.people?.length) continue
+    itemsTotal += it.cents
+    const part = allocate(it.cents, it.people.map(id => ({ id, w: 1 })), it.people.includes(payer) ? payer : it.people[0])
+    for (const id in part) owed[id] = (owed[id] || 0) + part[id]
+  }
+  const extra = amount - itemsTotal
+  if (!itemsTotal || extra < 0) return { owed, itemsTotal, ok: false }
+  if (extra > 0) {
+    const add = allocate(extra, Object.entries(owed).map(([id, w]) => ({ id, w })), payer)
+    for (const id in add) owed[id] += add[id]
+  }
+  return { owed, itemsTotal, ok: true }
+}
+
+// Pull "name ... price" lines out of OCR'd receipt text (skips totals, tax, payment lines).
+export function parseReceiptItems(text) {
+  const skip = /(sub\s*-?\s*total|total|tax|gst|hst|pst|vat|tip|gratuity|change|cash|visa|master|amex|debit|credit|balance|amount|due|paid|tender|card|auth|approved)/i
+  const out = []
+  for (const raw of (text || '').split(/\r?\n/)) {
+    const l = raw.trim()
+    const m = l.match(/^(.*?[a-zA-Z]{2,}.*?)\s+\$?\s?(\d{1,5})[.,](\d{2})\s*[A-Z]?$/)
+    if (!m || skip.test(m[1])) continue
+    const name = m[1].replace(/^\d+\s*(x\s*)?/i, '').replace(/[^\w &'/-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40)
+    const cents = +m[2] * 100 + +m[3]
+    if (name && cents > 0) out.push({ name, cents })
+  }
+  return out.slice(0, 30)
+}
