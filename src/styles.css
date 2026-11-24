@@ -256,3 +256,11 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .recharts-wrapper{font-family:var(--sans)}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* search + filters above the expense list */
+.filters{display:flex;flex-direction:column;gap:10px;margin:14px 0}
+.filters .two>select{flex:1;min-width:0}
+.home-actions{flex-wrap:wrap}
+.home-actions .btn{min-width:120px}
+.ghead-actions{flex-wrap:wrap}
+textarea.inp{resize:vertical;font:inherit;line-height:1.5}

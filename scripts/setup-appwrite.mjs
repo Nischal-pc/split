@@ -31,8 +31,8 @@ const ok409 = async (label, fn) => { try { await fn(); console.log('  +', label)
 const S = (key, size = 64, req = true) => ['s', key, size, req]
 const I = (key, req = true) => ['i', key, req]
 const collections = {
-  groups: { attrs: [S('name', 128), S('currency', 8), S('team_id'), S('created_by'), S('join_code', 16, false)], idx: ['team_id', 'join_code'] },
-  expenses: { attrs: [S('group_id'), S('description', 256), I('amount_cents'), S('paid_by'), S('category', 32), S('spent_on', 16), S('created_by')], idx: ['group_id'] },
+  groups: { attrs: [S('name', 128), S('currency', 8), S('team_id'), S('created_by'), S('join_code', 16, false), S('kind', 16, false)], idx: ['team_id', 'join_code'] },
+  expenses: { attrs: [S('group_id'), S('description', 256), I('amount_cents'), S('paid_by'), S('category', 32), S('spent_on', 16), S('created_by'), S('repeat', 16, false), S('next_on', 16, false), S('notes', 1000, false)], idx: ['group_id'] },
   splits: { attrs: [S('expense_id'), S('group_id'), S('member_id'), I('owed_cents')], idx: ['expense_id', 'group_id'] },
   settlements: { attrs: [S('group_id'), S('from_member'), S('to_member'), I('amount_cents')], idx: ['group_id'] },
   messages: { attrs: [S('group_id'), S('user_id'), S('display_name', 128), S('body', 2000)], idx: ['group_id'] },

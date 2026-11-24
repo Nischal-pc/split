@@ -1,6 +1,7 @@
 // All backend access lives here so the UI never touches Appwrite directly.
 import { ID, Query, Permission, Role, OAuthProvider } from 'appwrite'
 import { client, account, databases, teams, functions, DB, C } from './appwrite.js'
+import { dueDates, nextDate } from './split.js'
 
 const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
 
@@ -68,10 +69,11 @@ export async function listGroups(userId) {
   st.documents.forEach(x => { if (net[x.group_id] == null) return; if (x.from_member === userId) net[x.group_id] += x.amount_cents; if (x.to_member === userId) net[x.group_id] -= x.amount_cents })
   return groups.map(g => ({ ...g, myNet: net[g.id] || 0 }))
 }
-export async function createGroup(name, currency, userId) {
+// kind: undefined for a normal group, 'friend' for a 1:1 friend (non-group expenses).
+export async function createGroup(name, currency, userId, kind) {
   const team = await teams.create(ID.unique(), name)
   const doc = await databases.createDocument(DB, C.groups, ID.unique(),
-    { name, currency: currency || '$', team_id: team.$id, created_by: userId, join_code: genCode() }, teamPerms(team.$id))
+    { name, currency: currency || '$', team_id: team.$id, created_by: userId, join_code: genCode(), ...(kind && { kind }) }, teamPerms(team.$id))
   return doc.$id
 }
 // Join a group by its invite code via the server Function (adds you to the team).
@@ -146,16 +148,18 @@ export async function logActivity(group, actorName, text) {
 }
 
 /* ---------- expenses ---------- */
-export async function addExpense(group, { description, amount_cents, paid_by, category, spent_on, owed }, userId) {
+// `extra` holds optional fields (repeat, next_on, notes); callers only include keys that are set,
+// so saving still works on a backend that hasn't been re-provisioned yet.
+export async function addExpense(group, { description, amount_cents, paid_by, category, spent_on, owed, extra = {} }, userId) {
   const exp = await databases.createDocument(DB, C.expenses, ID.unique(),
-    { group_id: group.id, description, amount_cents, paid_by, category, spent_on, created_by: userId }, teamPerms(group.team_id))
+    { group_id: group.id, description, amount_cents, paid_by, category, spent_on, created_by: userId, ...extra }, teamPerms(group.team_id))
   await Promise.all(Object.entries(owed).map(([member_id, owed_cents]) =>
     databases.createDocument(DB, C.splits, ID.unique(),
       { expense_id: exp.$id, group_id: group.id, member_id, owed_cents }, teamPerms(group.team_id))))
   return exp.$id
 }
-export async function updateExpense(group, expenseId, { description, amount_cents, paid_by, category, spent_on, owed }) {
-  await databases.updateDocument(DB, C.expenses, expenseId, { description, amount_cents, paid_by, category, spent_on })
+export async function updateExpense(group, expenseId, { description, amount_cents, paid_by, category, spent_on, owed, extra = {} }) {
+  await databases.updateDocument(DB, C.expenses, expenseId, { description, amount_cents, paid_by, category, spent_on, ...extra })
   const old = await databases.listDocuments(DB, C.splits, [Query.equal('expense_id', expenseId), Query.limit(2000)])
   await Promise.all(old.documents.map(d => databases.deleteDocument(DB, C.splits, d.$id)))
   await Promise.all(Object.entries(owed).map(([member_id, owed_cents]) =>
@@ -166,6 +170,26 @@ export async function deleteExpense(expenseId) {
   const splits = await databases.listDocuments(DB, C.splits, [Query.equal('expense_id', expenseId), Query.limit(2000)])
   await Promise.all(splits.documents.map(d => databases.deleteDocument(DB, C.splits, d.$id)))
   await databases.deleteDocument(DB, C.expenses, expenseId)
+}
+
+// Materialize due copies of recurring expenses. Returns how many were created.
+// The template's next_on is advanced *before* copying so a second viewer loading at the same time
+// usually sees nothing due. shortcut: not a true lock — two simultaneous loads can still double-post; move to a scheduled Appwrite Function if that shows up.
+export async function runRecurring(group, expenses, splits, userId) {
+  const today = new Date().toISOString().slice(0, 10)
+  let made = 0
+  for (const e of expenses) {
+    if (!e.repeat || !e.next_on) continue
+    const dates = dueDates(e.next_on, e.repeat, today)
+    if (!dates.length) continue
+    await databases.updateDocument(DB, C.expenses, e.id, { next_on: nextDate(dates[dates.length - 1], e.repeat) })
+    const owed = Object.fromEntries(splits.filter(s => s.expense_id === e.id).map(s => [s.member_id, s.owed_cents]))
+    for (const d of dates) {
+      await addExpense(group, { description: e.description, amount_cents: e.amount_cents, paid_by: e.paid_by, category: e.category, spent_on: d, owed }, userId)
+      made++
+    }
+  }
+  return made
 }
 
 /* ---------- settlements ---------- */

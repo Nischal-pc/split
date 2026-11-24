@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt } from './split.js'
+import { computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, nextDate, filterExpenses } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -277,6 +277,7 @@ function HomeTab({ user, onOpen }) {
 
       <div className="home-actions">
         <button className="btn" onClick={() => setSheet('new')}>+ New group</button>
+        <button className="btn ghost" onClick={() => setSheet('friend')}>+ Add friend</button>
         <button className="btn ghost" onClick={() => setSheet('join')}>Join by code</button>
       </div>
 
@@ -285,25 +286,70 @@ function HomeTab({ user, onOpen }) {
         <Charts expenses={expenses} cur={oneCur} />
       </>}
 
-      <div className="eyebrow mt">Your groups</div>
-      {groups === null ? <div className="muted pad">Loading…</div>
-        : groups.length === 0 ? <div className="empty"><div className="big">🧾</div>No groups yet.<br />Create one and invite your friends.</div>
-          : <div className="card list">
-            {groups.map(g => (
-              <button key={g.id} className="row rowbtn" onClick={() => onOpen(g.id)}>
-                <div className="badge">👥</div>
-                <div className="grow"><b>{g.name}</b>
-                  <div className={'tiny ' + (g.myNet > 0 ? 'pos' : g.myNet < 0 ? 'neg' : 'muted')}>
-                    {g.myNet === 0 ? 'settled up' : g.myNet > 0 ? `you are owed ${money(g.myNet, g.currency)}` : `you owe ${money(-g.myNet, g.currency)}`}</div>
-                </div>
-                <div className="chev"><Ic.chev /></div>
-              </button>
-            ))}
-          </div>}
+      {groups === null ? <><div className="eyebrow mt">Your groups</div><div className="muted pad">Loading…</div></>
+        : <>
+          {groups.some(g => g.kind === 'friend') && <>
+            <div className="eyebrow mt">Friends</div>
+            <GroupRows groups={groups.filter(g => g.kind === 'friend')} icon="🧑" onOpen={onOpen} />
+          </>}
+          <div className="eyebrow mt">Your groups</div>
+          {groups.some(g => g.kind !== 'friend')
+            ? <GroupRows groups={groups.filter(g => g.kind !== 'friend')} icon="👥" onOpen={onOpen} />
+            : <div className="empty"><div className="big">🧾</div>No groups yet.<br />Create one and invite your friends.</div>}
+        </>}
 
       {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
+      {sheet === 'friend' && <AddFriend user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
       {sheet === 'join' && <JoinGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
     </main>
+  )
+}
+
+function GroupRows({ groups, icon, onOpen }) {
+  return (
+    <div className="card list">
+      {groups.map(g => (
+        <button key={g.id} className="row rowbtn" onClick={() => onOpen(g.id)}>
+          <div className="badge">{icon}</div>
+          <div className="grow"><b>{g.name}</b>
+            <div className={'tiny ' + (g.myNet > 0 ? 'pos' : g.myNet < 0 ? 'neg' : 'muted')}>
+              {g.myNet === 0 ? 'settled up' : g.myNet > 0 ? `you are owed ${money(g.myNet, g.currency)}` : `you owe ${money(-g.myNet, g.currency)}`}</div>
+          </div>
+          <div className="chev"><Ic.chev /></div>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// A friend is a 2-person group (kind 'friend'), so splits/balances/settle-up/chat all work unchanged.
+function AddFriend({ user, onClose, onDone }) {
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [cur, setCur] = useState('$')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function add() {
+    if (!name.trim()) return setErr('Add your friend’s name')
+    setBusy(true); setErr('')
+    try {
+      const id = await db.createGroup(`${displayName(user).split('@')[0]} & ${name.trim()}`, cur.trim() || '$', user.id, 'friend')
+      if (email.trim()) {
+        const g = await db.getGroup(id)
+        await db.inviteByEmail(g.team_id, email.trim())
+      }
+      onDone(id)
+    } catch (e) { setBusy(false); setErr(e.message || 'Could not add friend') }
+  }
+  return (
+    <Sheet title="Add a friend" onClose={onClose}>
+      <div className="note">Track expenses with one person, no group needed. Share the invite code or add their email.</div>
+      <label className="fld"><span>Friend’s name</span><input className="inp" value={name} onChange={e => setName(e.target.value)} placeholder="Sam" autoFocus /></label>
+      <label className="fld"><span>Their email (optional)</span><input className="inp" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sam@email.com" /></label>
+      <label className="fld"><span>Currency symbol</span><input className="inp" style={{ width: 90 }} value={cur} onChange={e => setCur(e.target.value)} maxLength={3} /></label>
+      {err && <div className="err"><Ic.alert />{err}</div>}
+      <button className="btn block" onClick={add} disabled={busy}>{busy ? 'Adding…' : 'Add friend'}</button>
+    </Sheet>
   )
 }
 
@@ -355,6 +401,16 @@ function GroupView({ groupId, user, onBack }) {
   const [data, setData] = useState({ expenses: [], splits: [], settlements: [], activity: [] })
   const [sheet, setSheet] = useState(null)
   const [tab, setTab] = useState('expenses')
+  const [reminded, setReminded] = useState({})
+
+  async function remind(s) {
+    const text = `🔔 Reminder: ${nameOf(members, s.from)}, you owe ${nameOf(members, s.to)} ${money(s.amount, group.currency)}. Settle up when you can!`
+    try {
+      await db.sendMessage(group, user.id, displayName(user), text)
+      logActivity(group, displayName(user), `reminded ${nameOf(members, s.from)} to pay ${money(s.amount, group.currency)}`)
+      setReminded(r => ({ ...r, [s.from + s.to]: true }))
+    } catch { /* ignore */ }
+  }
 
   async function load() {
     const g = await db.getGroup(groupId)
@@ -370,6 +426,9 @@ function GroupView({ groupId, user, onBack }) {
       setGroup(g)
       const [mem, d] = await Promise.all([db.listMembers(g.team_id), db.loadGroupData(groupId)])
       setMembers(mem); setData(d)
+      // post any due copies of recurring expenses, then reload (we're not subscribed yet)
+      const made = await db.runRecurring(g, d.expenses, d.splits, user.id).catch(() => 0)
+      if (made) { logActivity(g, 'SplitIt', `added ${made} recurring expense${made > 1 ? 's' : ''}`); await load() }
       unsub = db.subscribeGroup(g.team_id, load)
     })().catch(() => {})
     return () => unsub()
@@ -418,6 +477,8 @@ function GroupView({ groupId, user, onBack }) {
               <Avatar members={members} id={s.from} />
               <div className="grow"><b>{nameOf(members, s.from)}</b> owes <b>{nameOf(members, s.to)}</b></div>
               <div className="num">{money(s.amount, cur)}</div>
+              {s.from !== user.id && <button className="btn ghost sm" title={'Remind ' + nameOf(members, s.from)} disabled={reminded[s.from + s.to]}
+                onClick={() => remind(s)}>{reminded[s.from + s.to] ? 'Reminded ✓' : '🔔 Remind'}</button>}
               <button className="btn sm" onClick={() => setSheet({ settle: s })}>Settle</button>
             </div>
           ))}
@@ -540,17 +601,33 @@ function CodeChip({ code }) {
 }
 
 function ExpenseList({ members, expenses, splits, cur, me, onOpen }) {
+  const [f, setF] = useState({ q: '', cat: '', who: '' })
   if (!expenses.length) return <div className="empty">No expenses yet.<br />Tap “Add expense” to start.</div>
+  const shown = filterExpenses(expenses, f)
+  const set = k => e => setF(s => ({ ...s, [k]: e.target.value }))
   return (
+    <>
+    <div className="filters">
+      <input className="inp" type="search" aria-label="Search expenses" placeholder="Search expenses…" value={f.q} onChange={set('q')} />
+      <div className="two">
+        <select className="inp" aria-label="Filter by category" value={f.cat} onChange={set('cat')}>
+          <option value="">All categories</option>
+          {Object.keys(CATS).map(c => <option key={c} value={c}>{CATS[c]} {c}</option>)}</select>
+        <select className="inp" aria-label="Filter by who paid" value={f.who} onChange={set('who')}>
+          <option value="">Anyone paid</option>
+          {members.map(m => <option key={m.user_id} value={m.user_id}>{m.display_name}</option>)}</select>
+      </div>
+    </div>
+    {!shown.length && <div className="empty">No expenses match.</div>}
     <div className="card list">
-      {expenses.map(e => {
+      {shown.map(e => {
         const mine = splits.find(s => s.expense_id === e.id && s.member_id === me)?.owed_cents || 0
         const lent = e.amount_cents - mine
         const iPaid = e.paid_by === me
         return (
           <button className="row rowbtn" key={e.id} onClick={() => onOpen(e)}>
             <div className="badge">{CATS[e.category] || '🧾'}</div>
-            <div className="grow"><b className="truncate">{e.description}</b>
+            <div className="grow"><b className="truncate">{e.description}{e.repeat && <span className="faint tiny" title={'Repeats ' + e.repeat}> 🔁</span>}</b>
               <div className="muted tiny">{nameOf(members, e.paid_by)} paid {money(e.amount_cents, cur)}{e.spent_on ? ' · ' + fmtDate(e.spent_on) : ''}</div></div>
             <div className="right">
               {iPaid
@@ -561,6 +638,7 @@ function ExpenseList({ members, expenses, splits, cur, me, onOpen }) {
         )
       })}
     </div>
+    </>
   )
 }
 
@@ -571,6 +649,8 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const [paidBy, setPaidBy] = useState(edit?.paid_by || user.id)
   const [cat, setCat] = useState(edit?.category || 'general')
   const [date, setDate] = useState(edit?.spent_on || todayISO())
+  const [repeat, setRepeat] = useState(edit?.repeat || 'none')
+  const [notes, setNotes] = useState(edit?.notes || '')
   const [type, setType] = useState(edit ? 'exact' : 'equal')
   const [picks, setPicks] = useState(edit && editSplits?.length ? editSplits.map(s => s.member_id) : members.map(m => m.user_id))
   const [vals, setVals] = useState(() => { const v = {}; if (edit && editSplits) editSplits.forEach(s => { v[s.member_id] = s.owed_cents }); return v })
@@ -619,7 +699,14 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     if (!remain.ok) return setErr('Split does not add up yet')
     setBusy(true)
     const owed = splitsFromDraft({ amount: amt, type, picks, vals, payer: paidBy })
-    const payload = { description: desc.trim(), amount_cents: amt, paid_by: paidBy, category: cat, spent_on: date, owed }
+    // only send optional fields that are set (or being cleared) so old backends keep working
+    const extra = {}
+    if (notes.trim() || edit?.notes) extra.notes = notes.trim()
+    if (repeat !== 'none') {
+      extra.repeat = repeat
+      if (!edit || edit.repeat !== repeat || !edit.next_on) extra.next_on = nextDate(date, repeat)
+    } else if (edit?.repeat) { extra.repeat = ''; extra.next_on = '' }
+    const payload = { description: desc.trim(), amount_cents: amt, paid_by: paidBy, category: cat, spent_on: date, owed, extra }
     try {
       if (edit) await db.updateExpense(group, edit.id, payload)
       else await db.addExpense(group, payload, user.id)
@@ -655,6 +742,14 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
         <label className="fld"><span>Date</span>
           <input className="inp" type="date" value={date} max={todayISO()} onChange={e => setDate(e.target.value)} /></label>
       </div>
+      <div className="two">
+        <label className="fld"><span>Repeats</span>
+          <select className="inp" value={repeat} onChange={e => setRepeat(e.target.value)}>
+            <option value="none">Never</option><option value="weekly">Every week</option><option value="monthly">Every month</option></select></label>
+        <div className="fld tiny faint" style={{ alignSelf: 'end' }}>{repeat !== 'none' && `Next: ${fmtDate(nextDate(date, repeat))} — added automatically`}</div>
+      </div>
+      <label className="fld"><span>Notes (optional)</span>
+        <textarea className="inp" rows={2} maxLength={1000} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Anything to remember…" /></label>
 
       <div className="eyebrow">Split</div>
       <div className="seg">
@@ -686,6 +781,7 @@ function SettleUp({ group, members, user, pre, onClose }) {
   const [from, setFrom] = useState(pre?.from || members[0]?.user_id)
   const [to, setTo] = useState(pre?.to || members[1]?.user_id || members[0]?.user_id)
   const [amount, setAmount] = useState(pre ? (pre.amount / 100).toFixed(2) : '')
+  const [note, setNote] = useState('')
   const [err, setErr] = useState('')
   const cur = group.currency
 
@@ -695,7 +791,7 @@ function SettleUp({ group, members, user, pre, onClose }) {
     if (from === to) return setErr('Pick two different people')
     try {
       await db.addSettlement(group, { from_member: from, to_member: to, amount_cents: a })
-      logActivity(group, displayName(user), `${nameOf(members, from)} paid ${nameOf(members, to)} ${money(a, cur)}`)
+      logActivity(group, displayName(user), `${nameOf(members, from)} paid ${nameOf(members, to)} ${money(a, cur)}${note.trim() ? ` — “${note.trim().slice(0, 200)}”` : ''}`)
       onClose()
     } catch (e) { setErr(e.message || 'Could not record') }
   }
@@ -710,6 +806,7 @@ function SettleUp({ group, members, user, pre, onClose }) {
             {members.map(m => <option key={m.user_id} value={m.user_id}>{m.display_name}</option>)}</select></label>
       </div>
       <label className="fld"><span>Amount ({cur})</span><input className="inp" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></label>
+      <label className="fld"><span>Note (optional)</span><input className="inp" maxLength={200} value={note} onChange={e => setNote(e.target.value)} placeholder="e-Transfer, cash…" /></label>
       {err && <div className="err"><Ic.alert />{err}</div>}
       <button className="btn block" onClick={record}>Record payment</button>
     </Sheet>
@@ -914,8 +1011,10 @@ function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit 
         <div>
           <div className="detail-amt num">{money(expense.amount_cents, cur)}</div>
           <div className="muted tiny">{nameOf(members, expense.paid_by)} paid{expense.spent_on ? ' · ' + fmtDate(expense.spent_on) : ''}</div>
+          {expense.repeat && <div className="tiny faint">🔁 Repeats {expense.repeat}{expense.next_on ? ` · next ${fmtDate(expense.next_on)}` : ''}</div>}
         </div>
       </div>
+      {expense.notes && <div className="note mt" style={{ whiteSpace: 'pre-wrap' }}>{expense.notes}</div>}
       <div className="eyebrow mt">Split</div>
       <div className="card list">
         {splits.map(s => (

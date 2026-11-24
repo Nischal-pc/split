@@ -82,3 +82,26 @@ export function parseReceipt(text) {
   if (merchant) merchant = merchant.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
   return { amount: total, merchant }
 }
+
+// Next occurrence of a recurring expense. Monthly clamps to month end (Jan 31 -> Feb 28).
+export function nextDate(iso, repeat) {
+  const [y, m, d] = iso.split('-').map(Number)
+  if (repeat === 'weekly') return new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10)
+  const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate() // last day of next month
+  return new Date(Date.UTC(y, m, Math.min(d, last))).toISOString().slice(0, 10)
+}
+
+// Occurrence dates that are due (<= today), starting at next_on. Capped so a stale template can't explode.
+export function dueDates(nextOn, repeat, today, cap = 24) {
+  const out = []
+  for (let d = nextOn; d && d <= today && out.length < cap; d = nextDate(d, repeat)) out.push(d)
+  return out
+}
+
+// Search + filter expenses by text (description/notes), category and payer.
+export function filterExpenses(expenses, { q = '', cat = '', who = '' } = {}) {
+  const t = q.trim().toLowerCase()
+  return expenses.filter(e =>
+    (!t || (e.description || '').toLowerCase().includes(t) || (e.notes || '').toLowerCase().includes(t)) &&
+    (!cat || e.category === cat) && (!who || e.paid_by === who))
+}
