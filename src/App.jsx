@@ -1175,9 +1175,22 @@ function logActivity(group, name, text) { db.logActivity(group, name, text) }
 
 /* ---------------- Sheet (modal) ---------------- */
 function Sheet({ title, onClose, children }) {
+  const bgRef = useRef(null)
+  // iOS Safari doesn't shrink fixed elements when the keyboard opens; it only shrinks the
+  // visual viewport. Pin the backdrop to the visible area so the sheet sits above the keyboard.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const fit = () => { const el = bgRef.current; if (el) { el.style.top = vv.offsetTop + 'px'; el.style.height = vv.height + 'px' } }
+    fit()
+    vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit)
+    return () => { vv.removeEventListener('resize', fit); vv.removeEventListener('scroll', fit) }
+  }, [])
+  // keep the field being typed in visible once the keyboard has finished animating
+  const onFocus = e => { if (e.target.matches('input,select,textarea')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300) }
   return (
-    <div className="sheet-bg" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="sheet">
+    <div className="sheet-bg" ref={bgRef} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="sheet" onFocus={onFocus}>
         <div className="sheet-head"><h2>{title}</h2><button className="icon-btn" aria-label="Close" onClick={onClose}><Ic.close /></button></div>
         {children}
       </div>
