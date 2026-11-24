@@ -1,6 +1,8 @@
 // All backend access lives here so the UI never touches Appwrite directly.
 import { ID, Query, Permission, Role, OAuthProvider } from 'appwrite'
-import { client, account, databases, teams, DB, C } from './appwrite.js'
+import { client, account, databases, teams, functions, DB, C } from './appwrite.js'
+
+const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
 
 const norm = d => ({ ...d, id: d.$id, created_at: d.$createdAt })
 const teamPerms = teamId => [
@@ -69,8 +71,16 @@ export async function listGroups(userId) {
 export async function createGroup(name, currency, userId) {
   const team = await teams.create(ID.unique(), name)
   const doc = await databases.createDocument(DB, C.groups, ID.unique(),
-    { name, currency: currency || '$', team_id: team.$id, created_by: userId }, teamPerms(team.$id))
+    { name, currency: currency || '$', team_id: team.$id, created_by: userId, join_code: genCode() }, teamPerms(team.$id))
   return doc.$id
+}
+// Join a group by its invite code via the server Function (adds you to the team).
+export async function joinByCode(code, name) {
+  const ex = await functions.createExecution('join-by-code', JSON.stringify({ code, name }), false)
+  let r = {}
+  try { r = JSON.parse(ex.responseBody || '{}') } catch { /* ignore */ }
+  if (!r.ok) throw new Error(r.error || 'Could not join — is the code right?')
+  return r.groupId
 }
 export async function getGroup(groupId) {
   return norm(await databases.getDocument(DB, C.groups, groupId))

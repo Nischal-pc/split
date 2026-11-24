@@ -181,7 +181,7 @@ function ResetPassword({ rec, onDone }) {
 /* ---------------- Home ---------------- */
 function Home({ user, onOpen }) {
   const [groups, setGroups] = useState(null)
-  const [sheet, setSheet] = useState(false)
+  const [sheet, setSheet] = useState(null) // 'new' | 'join'
 
   async function load() { try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) } }
   useEffect(() => { load() }, [])
@@ -220,10 +220,32 @@ function Home({ user, onOpen }) {
             ))}
           </div>}
       <div className="actionbar">
-        <button className="btn block" onClick={() => setSheet(true)}>+ New group</button>
+        <button className="btn ghost" onClick={() => setSheet('join')}>Join by code</button>
+        <button className="btn" onClick={() => setSheet('new')}>+ New group</button>
       </div>
-      {sheet && <NewGroup user={user} onClose={() => setSheet(false)} onDone={id => { setSheet(false); onOpen(id) }} />}
+      {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
+      {sheet === 'join' && <JoinGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
     </main>
+  )
+}
+
+function JoinGroup({ user, onClose, onDone }) {
+  const [code, setCode] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function join() {
+    if (!code.trim()) return
+    setBusy(true); setErr('')
+    try { onDone(await db.joinByCode(code.trim(), displayName(user))) }
+    catch (e) { setBusy(false); setErr(e.message || 'Could not join') }
+  }
+  return (
+    <Sheet title="Join a group" onClose={onClose}>
+      <label className="fld"><span>Invite code</span>
+        <input className="inp" style={{ textTransform: 'uppercase', letterSpacing: '.1em' }} value={code} onChange={e => setCode(e.target.value)} placeholder="ABC123" autoFocus /></label>
+      {err && <div className="err"><Ic.alert />{err}</div>}
+      <button className="btn block" onClick={join} disabled={busy || !code}>{busy ? 'Joining…' : 'Join group'}</button>
+    </Sheet>
   )
 }
 
@@ -386,7 +408,12 @@ function ManagePeople({ group, members, user, onClose, onLeave }) {
 
   return (
     <Sheet title="People" onClose={onClose}>
-      <div className="note">Invite anyone by email — Appwrite sends them a link to join. New people can sign up from it.</div>
+      {group.join_code && <>
+        <div className="note">Share this code — people tap “Join by code” to join instantly.</div>
+        <div className="codebig">{group.join_code}</div>
+      </>}
+      <div className="eyebrow mt">Or invite by email</div>
+      <div className="note">Appwrite emails them a link to join (works for people who aren’t signed up yet).</div>
       <form onSubmit={invite} style={{ marginTop: 14 }}>
         <div style={{ display: 'flex', gap: 10 }}>
           <input className="inp" style={{ flex: 1 }} type="email" required placeholder="friend@email.com" value={email} onChange={e => setEmail(e.target.value)} />

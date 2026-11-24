@@ -1,4 +1,4 @@
-import { Client, Account, Databases, Teams } from 'appwrite'
+import { Client, Account, Databases, Teams, Functions } from 'appwrite'
 
 const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT
 const project = import.meta.env.VITE_APPWRITE_PROJECT_ID
@@ -12,6 +12,7 @@ export const client = new Client().setEndpoint(endpoint || 'https://cloud.appwri
 export const account = new Account(client)
 export const databases = new Databases(client)
 export const teams = new Teams(client)
+export const functions = new Functions(client)
 
 export const DB = import.meta.env.VITE_APPWRITE_DB_ID || 'splitit'
 export const C = {
