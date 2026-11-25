@@ -44,6 +44,10 @@ const Ic = {
   userPlus: () => <Svg><circle cx="10" cy="8" r="4" /><path d="M2 21c0-4 4-6 8-6s8 2 8 6M19 4v6M16 7h6" /></Svg>,
   ticket: () => <Svg><path d="M3 9a3 3 0 0 0 0 6v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a3 3 0 0 1 0-6V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z" /><path d="M14 5v14" strokeDasharray="2 2" /></Svg>,
 }
+// Google sign-in needs a Google Cloud OAuth client set in Appwrite (Auth → Settings → Google).
+// Hidden until then; set VITE_GOOGLE_SIGNIN=on (in .env and Vercel) to show the button.
+const GOOGLE_SIGNIN = import.meta.env.VITE_GOOGLE_SIGNIN === 'on'
+
 // [mode, tab label, one-line explanation]
 const SPLIT_MODES = [
   ['equal', 'Equally', 'Everyone ticked pays the same. Tap a person to leave them out.'],
@@ -295,7 +299,7 @@ function Auth({ onAuthed }) {
           </>
         ) : (
           <>
-          {mode !== 'forgot' && (
+          {GOOGLE_SIGNIN && mode !== 'forgot' && (
             <>
               <button type="button" className="btn gbtn block" onClick={db.signInWithGoogle}><GoogleG /> Continue with Google</button>
               <div className="divider"><span>or</span></div>
