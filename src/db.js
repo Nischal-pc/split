@@ -333,6 +333,12 @@ export function subscribeComments(expenseId, onNew) {
   })
 }
 
+// Email a payment reminder (server checks both people are in the group). Returns true if sent.
+export async function emailReminder(groupId, toUserId, amount) {
+  const ex = await functions.createExecution('join-by-code', JSON.stringify({ action: 'remind', groupId, toUserId, amount }), false)
+  try { return !!JSON.parse(ex.responseBody || '{}').ok } catch { return false }
+}
+
 /* ---------- invite links ---------- */
 export const inviteLink = code => `${window.location.origin}/?join=${encodeURIComponent(code)}`
 // Share sheet on phones, clipboard elsewhere. Returns 'shared' | 'copied' | null (cancelled).
