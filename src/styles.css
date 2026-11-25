@@ -510,3 +510,25 @@ details.more summary:hover{color:var(--fg)}
 .chip{font-weight:600;font-size:.72rem}
 .chip.up{color:var(--neg)}.chip.down{color:var(--pos)}
 .cap{text-transform:capitalize}
+
+/* responsive fixes (audit at 320–1440px) */
+.grow{overflow-wrap:anywhere} /* long names / descriptions wrap instead of overflowing */
+.owes-row{flex-wrap:wrap;row-gap:10px}
+.owes-actions{display:flex;gap:8px;margin-left:auto}
+@media (max-width:360px){ .owes-actions{width:100%;justify-content:flex-end} }
+.chipsel{max-width:min(100%,220px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qhead{flex-wrap:wrap}
+.qwith{min-width:0;max-width:100%}
+.paidby .chipsel{max-width:min(60vw,220px)}
+/* tap targets: text links get a comfortable hit area without changing how they look */
+.linkbtn,.linklike{min-height:36px;display:inline-flex;align-items:center}
+.fxlink{display:flex;margin:-14px 0 10px}
+.budget-set{display:inline-flex;margin:-10px 0 8px}
+.nudge-actions .linkbtn{min-height:36px}
+/* wide screens: keep the tab bar items with the content column instead of the screen edges */
+.tabbar{justify-content:center}
+.tabitem{max-width:170px}
+/* very small phones: keep the bottom action buttons on one line */
+@media (max-width:360px){
+  .actionbar .btn{padding:13px 10px;font-size:.88rem;white-space:nowrap}
+}

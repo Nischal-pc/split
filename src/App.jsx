@@ -815,13 +815,16 @@ function GroupView({ groupId, user, onBack }) {
         <div className="eyebrow mt">Who owes who</div>
         <div className="card list">
           {suggestions.map((s, i) => (
-            <div className="row" key={i}>
+            <div className="row owes-row" key={i}>
               <Avatar members={members} id={s.from} />
               <div className="grow"><b>{nameOf(members, s.from)}</b> owes <b>{nameOf(members, s.to)}</b></div>
               <div className="num">{money(s.amount, cur)}</div>
-              {s.from !== user.id && <button className="btn ghost sm" title={'Remind ' + nameOf(members, s.from)} disabled={reminded[s.from + s.to]}
-                onClick={() => remind(s)}>{{ push: 'Notified ✓', email: 'Emailed ✓', chat: 'Reminded ✓' }[reminded[s.from + s.to]] || '🔔 Remind'}</button>}
-              <button className="btn sm" onClick={() => setSheet({ settle: s })}>Settle</button>
+              {/* actions wrap under the name on narrow phones */}
+              <div className="owes-actions">
+                {s.from !== user.id && <button className="btn ghost sm" title={'Remind ' + nameOf(members, s.from)} disabled={reminded[s.from + s.to]}
+                  onClick={() => remind(s)}>{{ push: 'Notified ✓', email: 'Emailed ✓', chat: 'Reminded ✓' }[reminded[s.from + s.to]] || '🔔 Remind'}</button>}
+                <button className="btn sm" onClick={() => setSheet({ settle: s })}>Settle</button>
+              </div>
             </div>
           ))}
         </div>
