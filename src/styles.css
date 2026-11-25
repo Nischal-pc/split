@@ -532,3 +532,38 @@ details.more summary:hover{color:var(--fg)}
 @media (max-width:360px){
   .actionbar .btn{padding:13px 10px;font-size:.88rem;white-space:nowrap}
 }
+
+/* ================= Desktop (≥1024px): sidebar + main pane ================= */
+.desk{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:100dvh}
+.side{position:sticky;top:0;height:100dvh;overflow-y:auto;display:flex;flex-direction:column;gap:2px;
+  padding:22px 14px 18px;background:var(--surface);border-right:1px solid var(--line)}
+.side-brand{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:600;font-size:1.2rem;padding:0 10px 18px}
+.side-nav{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}
+.side-link{display:flex;align-items:center;gap:12px;padding:10px 12px;border:none;border-radius:12px;background:none;color:var(--muted);font-weight:600;font-size:.93rem;text-align:left;transition:background .14s,color .14s}
+.side-link:hover{background:var(--surface-2);color:var(--fg)}
+.side-link.on{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.side-h{font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:16px 12px 6px}
+.side-group{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:none;border-radius:12px;background:none;text-align:left;transition:background .14s}
+.side-group:hover{background:var(--surface-2)}
+.side-group.on{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--accent)}
+.side-ico{font-size:1rem;flex:none}
+.side-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.92rem;font-weight:500}
+.side-bal{flex:none;font-size:.8rem;font-weight:600}
+.side-empty{color:var(--faint);font-size:.86rem;padding:4px 12px;margin:0}
+.side-more{border:none;background:none;color:var(--muted);font-size:.8rem;text-align:left;padding:8px 12px;min-height:32px}
+.side-more:hover{color:var(--fg)}
+.side-new{margin-top:auto;padding:12px}
+.desk-main{min-width:0}
+.desk .wrap{max-width:760px;padding:8px 40px 120px}
+.desk .wrap.home{max-width:1100px}
+.desk .home-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;align-items:start}
+.desk .home-grid .spend{margin-top:24px}
+.desk .home-groups{display:none} /* the sidebar lists groups */
+.desk .fab{right:40px;bottom:32px}
+.desk .actionbar{left:280px;max-width:760px;padding:16px 40px 24px}
+.desk .toast,.desk ~ .toast{bottom:32px;left:calc(50% + 140px)}
+/* dialogs instead of bottom sheets */
+.desk .sheet-bg{align-items:center;padding:24px}
+.desk .sheet{border-radius:24px;max-width:560px;max-height:86vh;animation:popin .22s cubic-bezier(.16,1,.3,1);padding:26px 28px 24px}
+@keyframes popin{from{transform:translateY(12px) scale(.98)}to{transform:none}}
+@media (max-width:1180px){ .desk .home-grid{grid-template-columns:minmax(0,1fr)} .desk .wrap.home{max-width:760px} }

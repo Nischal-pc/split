@@ -79,6 +79,7 @@ const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
 
 export default function App() {
+  const wide = useWide()
   const [user, setUser] = useState(undefined)
   const [groupId, setGroupId] = useState(null)
   const [recovery, setRecovery] = useState(null)
@@ -122,6 +123,10 @@ export default function App() {
   if (user === undefined) return <div className="center">Loading…</div>
   if (recovery) return <ResetPassword rec={recovery} onDone={() => setRecovery(null)} />
   if (!user) return <Auth onAuthed={onAuthed} />
+  if (wide) return <>
+    <Desktop user={user} groupId={groupId} onOpen={setGroupId} onSignOut={signOut} />
+    {joinErr && <Toast text={joinErr} tone="bad" onDone={() => setJoinErr('')} />}
+  </>
   if (groupId) return <GroupView groupId={groupId} user={user} onBack={() => setGroupId(null)} />
   return <>
     <Shell user={user} onOpen={setGroupId} onSignOut={signOut} />
@@ -148,6 +153,76 @@ function Toast({ text, action, onAction, onDone, ms = 7000, tone = '' }) {
     <div className={'toast ' + tone} role="status">
       <span>{text}</span>
       {action && <button onClick={onAction}>{action}</button>}
+    </div>
+  )
+}
+
+// True on laptop/desktop widths, where SplitIt switches to a sidebar + main pane layout.
+function useWide(query = '(min-width: 1024px)') {
+  const [wide, setWide] = useState(() => matchMedia(query).matches)
+  useEffect(() => {
+    const mq = matchMedia(query), on = e => setWide(e.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [query])
+  return wide
+}
+
+/* ---------------- Desktop: sidebar + main pane ---------------- */
+function Desktop({ user, groupId, onOpen, onSignOut }) {
+  const [tab, setTab] = useState('home')
+  const [groups, setGroups] = useState(null)
+  const [archived, setArchived] = useState([])
+  const [creating, setCreating] = useState(false)
+  useEffect(() => {
+    let t
+    const load = () => { clearTimeout(t); t = setTimeout(() => {
+      db.listGroups(user.id).then(setGroups).catch(() => setGroups(g => g || []))
+      db.getArchived().then(setArchived).catch(() => {})
+    }, 250) }
+    load()
+    const unsub = db.subscribeAll(load) // balances in the sidebar follow every change
+    window.addEventListener('splitit-synced', load)
+    return () => { clearTimeout(t); unsub(); window.removeEventListener('splitit-synced', load) }
+  }, [user.id, groupId, tab])
+  const go = t => { onOpen(null); setTab(t) }
+  const gs = groups || []
+  const shelved = g => archived.includes(g.id) && g.myNet === 0
+  const friends = gs.filter(g => g.kind === 'friend' && !shelved(g)), teams = gs.filter(g => g.kind !== 'friend' && !shelved(g))
+  const nArchived = gs.filter(shelved).length
+  const row = g => (
+    <button key={g.id} className={'side-group' + (groupId === g.id ? ' on' : '')} aria-current={groupId === g.id ? 'page' : undefined} onClick={() => onOpen(g.id)}>
+      <span className="side-ico" aria-hidden="true">{g.kind === 'friend' ? '🧑' : '👥'}</span>
+      <span className="side-name">{g.name}</span>
+      <span className={'side-bal num ' + (g.myNet > 0 ? 'pos' : g.myNet < 0 ? 'neg' : 'muted')}>
+        {g.myNet === 0 ? '✓' : (g.myNet > 0 ? '+' : '−') + money(Math.abs(g.myNet), g.currency)}</span>
+    </button>
+  )
+  return (
+    <div className="desk">
+      <aside className="side" aria-label="Navigation">
+        <div className="side-brand"><span className="logo">S</span>SplitIt</div>
+        <nav className="side-nav">
+          {[['home', 'Home', Ic.home], ['activity', 'Activity', Ic.pulse], ['account', 'Account', Ic.user]].map(([id, label, Icon]) => (
+            <button key={id} className={'side-link' + (!groupId && tab === id ? ' on' : '')} aria-current={!groupId && tab === id ? 'page' : undefined} onClick={() => go(id)}>
+              <Icon /><span>{label}</span></button>
+          ))}
+        </nav>
+        {groups === null ? <p className="side-empty">Loading…</p> : <>
+          {friends.length > 0 && <><div className="side-h">Friends</div>{friends.map(row)}</>}
+          <div className="side-h">Groups</div>
+          {teams.length ? teams.map(row) : <p className="side-empty">No groups yet.</p>}
+          {nArchived > 0 && <button className="side-more" onClick={() => go('home')}>{nArchived} archived · see on Home</button>}
+        </>}
+        <button className="btn ghost block withicon side-new" onClick={() => setCreating(true)}><Ic.plus />New group</button>
+      </aside>
+      <div className="desk-main">
+        {groupId ? <GroupView key={groupId} groupId={groupId} user={user} onBack={() => onOpen(null)} />
+          : tab === 'home' ? <HomeTab user={user} onOpen={onOpen} onAccount={() => setTab('account')} />
+            : tab === 'activity' ? <GlobalActivity user={user} />
+              : <AccountTab user={user} onSignOut={onSignOut} />}
+      </div>
+      {creating && <NewGroup user={user} onClose={() => setCreating(false)} onDone={id => { setCreating(false); onOpen(id) }} />}
     </div>
   )
 }
@@ -430,7 +505,9 @@ function HomeTab({ user, onOpen, onAccount }) {
   const spendItems = spend.filter(i => curOf(i.group_id) === spendCur)
 
   return (
-    <main className="wrap">
+    <main className="wrap home">
+      <div className="home-grid">
+      <div className="home-col">
       <section className="dash" aria-label="Your balances">
         <div className="dash-hello">
           <div className="grow">
@@ -497,12 +574,18 @@ function HomeTab({ user, onOpen, onAccount }) {
         </div>
       </>}
 
+      </div>
+      <div className="home-col">
       {spendCur && spend.length > 0 && <>
         <RecapCard items={spendItems} groups={gs} cur={spendCur} overall={oneCur ? overall : 0} onSee={ym => { setMonth(ym); document.getElementById('spending')?.scrollIntoView({ behavior: 'smooth' }) }} />
         <MonthSpending items={spendItems} groups={gs} cur={spendCur} month={month} setMonth={setMonth} otherCurrencies={currencies.length > 1}
           budget={budgets[spendCur] || 0} onBudget={async c => setBudgets(await db.setBudget(spendCur, c))} onInsights={() => setSheet('insights')} />
       </>}
 
+      </div>
+      </div>
+
+      <div className="home-groups">
       {groups === null ? <><div className="eyebrow mt">Your groups</div><div className="muted pad">Loading…</div></>
         : <>
           {active.some(g => g.kind === 'friend') && <>
@@ -518,6 +601,7 @@ function HomeTab({ user, onOpen, onAccount }) {
             <GroupRows groups={shelved} icon="🗂️" onOpen={onOpen} />
           </details>}
         </>}
+      </div>
 
       {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
       {sheet === 'insights' && <Insights month={month} cur={spendCur} items={spendItems} groups={gs} people={people || []} budget={budgets[spendCur] || 0} user={user}

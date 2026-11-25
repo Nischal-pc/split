@@ -245,6 +245,11 @@ export function subscribeGroup(teamId, cb) {
   return client.subscribe(chans, () => cb())
 }
 
+// Any change to expenses, payments or groups you can see (used by the desktop sidebar to stay current).
+export function subscribeAll(cb) {
+  return client.subscribe([C.expenses, C.splits, C.settlements, C.groups].map(c => `databases.${DB}.collections.${c}.documents`), () => cb())
+}
+
 export async function logActivity(group, actorName, text) {
   await databases.createDocument(DB, C.activity, ID.unique(),
     { group_id: group.id, actor_name: actorName, text }, teamPerms(group.team_id)).catch(() => {})
