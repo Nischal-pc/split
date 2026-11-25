@@ -109,7 +109,7 @@ async function _listPeople(userId) {
     databases.listDocuments(DB, C.settlements, [Query.limit(2000)]),
   ])
   const groups = await Promise.all(gr.documents.map(async g => ({
-    name: g.name, currency: g.currency,
+    id: g.$id, team_id: g.team_id, name: g.name, currency: g.currency,
     members: await groupMembers(g).catch(() => []),
     expenses: e.documents.filter(x => x.group_id === g.$id).map(norm),
     splits: s.documents.filter(x => x.group_id === g.$id),
@@ -342,6 +342,17 @@ export async function pushReminder(groupId, toUserId, amount) {
 export async function emailReminder(groupId, toUserId, amount) {
   const ex = await functions.createExecution('join-by-code', JSON.stringify({ action: 'remind', groupId, toUserId, amount }), false)
   try { return !!JSON.parse(ex.responseBody || '{}').ok } catch { return false }
+}
+
+// Settle everything with one person: record the matching payment in each group (parts from peopleBalances).
+export async function settleAll(person, me) {
+  for (const part of person.parts) {
+    const a = Math.abs(part.amount)
+    if (!a) continue
+    const [from_member, to_member] = part.amount > 0 ? [person.user_id, me.id] : [me.id, person.user_id]
+    await addSettlement(part.group, { from_member, to_member, amount_cents: a })
+    logActivity(part.group, me.name, `${part.amount > 0 ? person.name : me.name} paid ${part.amount > 0 ? me.name : person.name} ${person.cur}${(a / 100).toFixed(2)} (settled all across groups)`)
+  }
 }
 
 /* ---------- invite links ---------- */

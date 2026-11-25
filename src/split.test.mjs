@@ -62,6 +62,7 @@ const g3 = { name: 'Euro', currency: '€', members: M('me', 'sam'), expenses: [
 const pb = peopleBalances('me', [g1, g2, g3])
 assert.equal(pb.length, 1) // € group is settled, maya owes sam not me
 assert.deepEqual([pb[0].user_id, pb[0].net, pb[0].cur, pb[0].groups], ['sam', 3000, '$', ['Roomies', 'Trip']]) // 40 owed - 10 owing
+assert.deepEqual(pb[0].parts.map(x => [x.group.name, x.amount]), [['Roomies', 4000], ['Trip', -1000]]) // settle-all pieces sum to the net
 
 // itemized split: pizza 20 shared a+b, beer 10 for b only, total 33 (3 tax) -> tax shared 1:2
 let it = itemSplit(3300, [{ cents: 2000, people: ['a', 'b'] }, { cents: 1000, people: ['b'] }], 'a')

@@ -481,7 +481,7 @@ function HomeTab({ user, onOpen, onAccount }) {
         <div className="eyebrow mt">Balances with people</div>
         <div className="card list" aria-label="What each person owes you or you owe them, across all groups">
           {people.map(p => (
-            <div className="row" key={p.user_id + p.cur}>
+            <button className="row rowbtn" key={p.user_id + p.cur} onClick={() => setSheet({ settleAll: p })} aria-label={`Settle up with ${p.name}`}>
               <div className="avatar" style={{ background: COLORS[[...p.user_id].reduce((h, c) => h + c.charCodeAt(0), 0) % COLORS.length] }}>{p.name.slice(0, 1).toUpperCase()}</div>
               <div className="grow"><b className="truncate">{p.name}</b>
                 <div className="tiny muted truncate">{p.groups.length === 1 ? 'in ' : `across ${p.groups.length} groups · `}{p.groups.join(', ')}</div></div>
@@ -489,7 +489,8 @@ function HomeTab({ user, onOpen, onAccount }) {
                 <div className="tiny muted">{p.net > 0 ? 'owes you' : 'you owe'}</div>
                 <div className={'num ' + (p.net > 0 ? 'pos' : 'neg')}>{money(Math.abs(p.net), p.cur)}</div>
               </div>
-            </div>
+              <div className="chev"><Ic.chev /></div>
+            </button>
           ))}
         </div>
       </>}
@@ -516,6 +517,7 @@ function HomeTab({ user, onOpen, onAccount }) {
         </>}
 
       {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
+      {sheet?.settleAll && <SettleAll person={sheet.settleAll} user={user} onClose={() => setSheet(null)} onDone={() => { setSheet(null); load() }} />}
       {sheet === 'friend' && <AddFriend user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
       {sheet === 'add' && <QuickAdd groups={gs} user={user} onClose={() => setSheet(null)} onDone={() => { setSheet(null); load() }} />}
       {gs.length > 0 && !sheet && <button className="fab" onClick={() => setSheet('add')}><Ic.plus /><span>Add expense</span></button>}
@@ -549,6 +551,50 @@ function QuickAdd({ groups, user, onClose, onDone }) {
           </button>
         ))}
       </div>
+    </Sheet>
+  )
+}
+
+// One person, every shared group: see the breakdown, pay or get paid once, record it in each group.
+function SettleAll({ person: p, user, onClose, onDone }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [copied, setCopied] = useState(false)
+  const iOwe = p.net < 0, net = money(Math.abs(p.net), p.cur)
+  const bank = myBank()
+  const copyEmail = async () => { try { await navigator.clipboard.writeText(p.email); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* ignore */ } }
+  const ask = () => db.shareText('SplitIt', `Hi ${p.name}, across our groups (${p.groups.join(', ')}) you owe me ${net} in total on SplitIt. You can send it by Interac e-Transfer to ${user.email}. Thanks!`).catch(() => {})
+  async function record() {
+    setBusy(true); setErr('')
+    try { await db.settleAll(p, { id: user.id, name: displayName(user) }); onDone() }
+    catch (e) { setBusy(false); setErr(e.message || 'Could not record the payments') }
+  }
+  return (
+    <Sheet title={`Settle up with ${p.name}`} onClose={onClose}>
+      <div className="payamt num">{net}</div>
+      <p className="split-hint">{iOwe ? `You owe ${p.name} this in total` : `${p.name} owes you this in total`} across {p.groups.length} group{p.groups.length === 1 ? '' : 's'}. One payment settles all of it.</p>
+      <div className="card list">
+        {p.parts.map(x => (
+          <div className="row" key={x.group.id}>
+            <div className="grow"><b className="truncate">{x.group.name}</b>
+              <div className="tiny muted">{x.amount > 0 ? `${p.name} owes you` : `you owe ${p.name}`}</div></div>
+            <div className={'num ' + (x.amount > 0 ? 'pos' : 'neg')}>{money(Math.abs(x.amount), p.cur)}</div>
+          </div>
+        ))}
+      </div>
+      {iOwe ? <div className="payhelp mt">
+        <div className="payhelp-t">Pay {p.name} {net} by Interac e-Transfer</div>
+        {p.email && <div className="payrow"><span className="muted">Send to</span><b className="truncate">{p.email}</b>
+          <button type="button" className="btn ghost sm" onClick={copyEmail}>{copied ? 'Copied ✓' : 'Copy'}</button></div>}
+        {bank && <button type="button" className="btn ghost block withicon" onClick={async () => { if (p.email) await copyEmail(); window.open(bank[2], '_blank', 'noopener') }}>
+          <Ic.bank />{p.email ? 'Copy email & open ' : 'Open '}{bank[1]}</button>}
+        {!bank && <p className="split-hint" style={{ margin: '8px 0 0' }}>Tip: choose your bank in Account → My bank to open it from here.</p>}
+      </div>
+        : <button type="button" className="btn ghost block withicon mt" onClick={ask}><Ic.share />Ask {p.name} to pay {net}</button>}
+      {err && <div className="err mt"><Ic.alert />{err}</div>}
+      <button className="btn block mt" disabled={busy} onClick={record}>
+        {busy ? 'Recording…' : iOwe ? `I’ve paid ${p.name} ${net}` : `${p.name} paid me ${net}`}</button>
+      <p className="split-hint" style={{ textAlign: 'center', marginTop: 10 }}>Records a matching payment in each group, so every balance with {p.name} goes to $0.</p>
     </Sheet>
   )
 }
