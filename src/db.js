@@ -1,7 +1,7 @@
 // All backend access lives here so the UI never touches Appwrite directly.
 import { ID, Query, Permission, Role, OAuthProvider } from 'appwrite'
 import { client, account, databases, teams, functions, DB, C, VAPID_PUBLIC_KEY } from './appwrite.js'
-import { dueDates, nextDate, peopleBalances } from './split.js'
+import { dueDates, nextDate, peopleBalances, myShares } from './split.js'
 
 const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
 
@@ -402,7 +402,16 @@ export async function disablePush() {
   return 'off'
 }
 
+// Your share of every expense you're in, across all groups (see myShares).
+async function _listMySpending(userId) {
+  const [sp, ex] = await Promise.all([
+    databases.listDocuments(DB, C.splits, [Query.equal('member_id', userId), Query.limit(5000)]),
+    databases.listDocuments(DB, C.expenses, [Query.limit(5000)]),
+  ])
+  return myShares(userId, ex.documents.map(norm), sp.documents)
+}
 // Cached readers (fall back to the last saved copy when offline).
+export const listMySpending = (...a) => cached('spend', () => _listMySpending(...a))
 export const listGroups = (...a) => cached('groups', () => _listGroups(...a))
 export const listPeople = (...a) => cached('people', () => _listPeople(...a))
 export const getGroup = (...a) => cached('group.' + a[0], () => _getGroup(...a))

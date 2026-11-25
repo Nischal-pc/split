@@ -1,6 +1,7 @@
 // Appwrite Function: push notifications for SplitIt.
 // 1) Database events on expenses: tell the rest of the group about adds / edits / deletes.
 // 2) Called by a signed-in user with { action: 'remind', groupId, toUserId, amount }: nudge one person to pay.
+// 3) Scheduled on the 1st of each month: "Your October recap" to everyone with notifications on.
 // Variables: APPWRITE_API_KEY, APP_DB_ID, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT.
 import { Client, Databases, Teams, Query } from 'node-appwrite'
 import webpush from 'web-push'
@@ -34,6 +35,48 @@ export default async ({ req, res, log, error }) => {
 
   let body = req.body
   if (typeof body === 'string') { try { body = JSON.parse(body || '{}') } catch { body = {} } }
+
+  // ---- 3) monthly recap: runs on the schedule (1st of the month), or when run with the server key ----
+  const trigger = req.headers['x-appwrite-trigger']
+  if (trigger === 'schedule' || (body?.action === 'recap' && !req.headers['x-appwrite-user-id'])) {
+    // The free plan only allows a daily schedule, so skip every day except the 1st.
+    if (trigger === 'schedule' && new Date().getUTCDate() !== 1) return res.json({ ok: true, skipped: 'not the 1st' })
+    try {
+      const now = new Date()
+      const ym = body?.month || new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7)
+      const monthLabel = new Date(ym + '-01T12:00:00Z').toLocaleString('en-CA', { month: 'long', timeZone: 'UTC' })
+      const subs = (await databases.listDocuments(DB, 'push_subs', [Query.limit(500)])).documents
+      let users = [...new Set(subs.map(s => s.user_id))]
+      // server-key test runs can limit the recap to specific people so real users aren't notified
+      if (trigger !== 'schedule' && Array.isArray(body?.only)) users = users.filter(u => body.only.includes(u))
+      if (!users.length) return res.json({ ok: true, month: ym, sent: 0 })
+      const exps = (await databases.listDocuments(DB, 'expenses', [Query.startsWith('spent_on', ym), Query.limit(5000)])).documents
+      const byId = Object.fromEntries(exps.map(e => [e.$id, e]))
+      const groupCur = {}
+      for (const gid of [...new Set(exps.map(e => e.group_id))]) groupCur[gid] = (await databases.getDocument(DB, 'groups', gid).catch(() => ({}))).currency || '$'
+      // per user: total per currency + groups, from their splits of that month's expenses
+      const spent = {}
+      for (let i = 0; i < users.length; i += 100) {
+        const sp = (await databases.listDocuments(DB, 'splits', [Query.equal('member_id', users.slice(i, i + 100)), Query.limit(5000)])).documents
+        for (const s of sp) {
+          const e = byId[s.expense_id]; if (!e) continue
+          const u = spent[s.member_id] ||= { cur: {}, groups: new Set() }
+          const c = groupCur[e.group_id]; u.cur[c] = (u.cur[c] || 0) + s.owed_cents; u.groups.add(e.group_id)
+        }
+      }
+      const targets = users.filter(u => spent[u])
+      const r = await pushTo(targets, sub => {
+        const u = spent[sub.user_id], [c, cents] = Object.entries(u.cur).sort((a, b) => b[1] - a[1])[0]
+        return { title: `Your ${monthLabel} recap`, body: `You spent ${money(cents, c)} across ${u.groups.size} group${u.groups.size === 1 ? '' : 's'}. Tap to see where it went.`,
+          url: `/?recap=${ym}`, tag: `recap-${ym}` }
+      })
+      log(`recap ${ym}: ${targets.length} people, sent ${r.sent}/${r.devices}`)
+      return res.json({ ok: true, month: ym, people: targets.length, ...r })
+    } catch (e) {
+      error(e.message)
+      return res.json({ ok: false, error: e.message }, 500)
+    }
+  }
 
   // ---- 2) payment reminder from one member to another ----
   if (body?.action === 'remind' && !req.headers['x-appwrite-event']) {

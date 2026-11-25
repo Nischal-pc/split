@@ -33,7 +33,7 @@ const I = (key, req = true) => ['i', key, req]
 const collections = {
   groups: { attrs: [S('name', 128), S('currency', 8), S('team_id'), S('created_by'), S('join_code', 16, false), S('kind', 16, false), S('default_split', 2000, false), S('guests', 4000, false)], idx: ['team_id', 'join_code'] },
   expenses: { attrs: [S('group_id'), S('description', 256), I('amount_cents'), S('paid_by'), S('category', 32), S('spent_on', 16), S('created_by'), S('repeat', 16, false), S('next_on', 16, false), S('notes', 1000, false), I('orig_amount', false), S('orig_cur', 8, false), S('edited_at', 32, false)], idx: ['group_id'] },
-  splits: { attrs: [S('expense_id'), S('group_id'), S('member_id'), I('owed_cents')], idx: ['expense_id', 'group_id'] },
+  splits: { attrs: [S('expense_id'), S('group_id'), S('member_id'), I('owed_cents')], idx: ['expense_id', 'group_id', 'member_id'] },
   settlements: { attrs: [S('group_id'), S('from_member'), S('to_member'), I('amount_cents')], idx: ['group_id'] },
   messages: { attrs: [S('group_id'), S('user_id'), S('display_name', 128), S('body', 2000)], idx: ['group_id'] },
   activity: { attrs: [S('group_id'), S('actor_name', 128), S('text', 512)], idx: ['group_id'] },

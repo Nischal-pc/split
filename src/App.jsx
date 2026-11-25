@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents, monthOf, shiftMonth, inMonth, sumCents } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -93,9 +93,11 @@ export default function App() {
     // ?join=CODE invite links: remember the code through sign-up / log-in, then join.
     const q = new URLSearchParams(window.location.search)
     const code = q.get('join'), open = q.get('group') // ?group= comes from tapping a notification
+    const recap = /^\d{4}-\d{2}$/.test(q.get('recap') || '') && q.get('recap') // ?recap= from the monthly recap notification
     if (code) sessionStorage.setItem('splitit.join', code.trim().toUpperCase())
     if (open) sessionStorage.setItem('splitit.open', open)
-    if (code || open) db.clearUrlParams()
+    if (recap) sessionStorage.setItem('splitit.recap', recap)
+    if (code || open || recap) db.clearUrlParams()
     boot()
   }, [])
   const [joinErr, setJoinErr] = useState('')
@@ -390,13 +392,14 @@ function ResetPassword({ rec, onDone }) {
 /* ---------------- Home ---------------- */
 function HomeTab({ user, onOpen, onAccount }) {
   const [groups, setGroups] = useState(null)
-  const [expenses, setExpenses] = useState([])
+  const [spend, setSpend] = useState([]) // your share of each expense
+  const [month, setMonth] = useState(() => sessionStorage.getItem('splitit.recap') || monthOf(todayISO()))
   const [people, setPeople] = useState(null)
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
 
   async function load() {
     try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) }
-    try { setExpenses(await db.listAllExpenses()) } catch { setExpenses([]) }
+    try { setSpend(await db.listMySpending(user.id)) } catch { setSpend([]) }
     try { setPeople(await db.listPeople(user.id)) } catch { setPeople([]) }
   }
   useEffect(() => {
@@ -414,6 +417,10 @@ function HomeTab({ user, onOpen, onAccount }) {
   const currencies = [...new Set(gs.map(g => g.currency))]
   const oneCur = currencies.length === 1 ? currencies[0] : null
   const where = n => n === 0 ? 'nothing outstanding' : `in ${n} ${n === 1 ? 'group' : 'groups'}`
+  // Spending is shown in one currency: the only one, or the one most of your spending is in.
+  const curOf = id => gs.find(g => g.id === id)?.currency
+  const spendCur = oneCur || Object.entries(spend.reduce((a, i) => { const c = curOf(i.group_id); if (c) a[c] = (a[c] || 0) + i.amount_cents; return a }, {})).sort((a, b) => b[1] - a[1])[0]?.[0]
+  const spendItems = spend.filter(i => curOf(i.group_id) === spendCur)
 
   return (
     <main className="wrap">
@@ -482,9 +489,9 @@ function HomeTab({ user, onOpen, onAccount }) {
         </div>
       </>}
 
-      {oneCur && expenses.length > 0 && <>
-        <div className="eyebrow mt">Your spending</div>
-        <Charts expenses={expenses} cur={oneCur} />
+      {spendCur && spend.length > 0 && <>
+        <RecapCard items={spendItems} groups={gs} cur={spendCur} overall={oneCur ? overall : 0} onSee={ym => { setMonth(ym); document.getElementById('spending')?.scrollIntoView({ behavior: 'smooth' }) }} />
+        <MonthSpending items={spendItems} groups={gs} cur={spendCur} month={month} setMonth={setMonth} otherCurrencies={currencies.length > 1} />
       </>}
 
       {groups === null ? <><div className="eyebrow mt">Your groups</div><div className="muted pad">Loading…</div></>
@@ -1386,7 +1393,7 @@ function timeAgo(ts) {
   return Math.floor(d / 86400) + 'd ago'
 }
 // Reusable chart block. Pass `members` to also show the "Who paid" bar.
-function Charts({ expenses, cur, members }) {
+function Charts({ expenses, cur, members, stats = true }) {
   const byCat = {}
   expenses.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount_cents })
   const catData = Object.entries(byCat).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value)
@@ -1419,12 +1426,12 @@ function Charts({ expenses, cur, members }) {
   if (total === 0) return <div className="empty">Add an expense to see spending charts.</div>
   return (
     <>
-      <div className="stats">
+      {stats && <div className="stats">
         <div className="stat"><div className="stat-num num">{money(total, cur)}</div><div className="stat-lbl">total spent</div></div>
         <div className="stat"><div className="stat-num num">{count}</div><div className="stat-lbl">expenses</div></div>
         <div className="stat"><div className="stat-num num">{money(avg, cur)}</div><div className="stat-lbl">avg / expense</div></div>
         <div className="stat"><div className="stat-num">{CATS[topCat?.name] || '🧾'} {topCat?.name || '—'}</div><div className="stat-lbl">top category</div></div>
-      </div>
+      </div>}
 
       {timeData.length >= 2 && <>
         <div className="eyebrow mt">Spending over time</div>
@@ -1483,6 +1490,72 @@ function Charts({ expenses, cur, members }) {
         </div>
       </>}
     </>
+  )
+}
+
+const monthName = (ym, year) => new Date(ym + '-01T00:00').toLocaleDateString(undefined, year ? { month: 'long', year: 'numeric' } : { month: 'long' })
+
+// Home: your share of spending for one month, with ‹ › to move between months.
+function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies }) {
+  const now = monthOf(todayISO())
+  const first = items.reduce((m, i) => (monthOf(i.spent_on) < m ? monthOf(i.spent_on) : m), now)
+  const these = inMonth(items, month), total = sumCents(these)
+  const prevYm = shiftMonth(month, -1), prev = sumCents(inMonth(items, prevYm))
+  const delta = prev > 0 && total > 0 ? Math.round((total - prev) / prev * 100) : null
+  const byGroup = Object.entries(these.reduce((a, i) => { a[i.group_id] = (a[i.group_id] || 0) + i.amount_cents; return a }, {}))
+    .map(([id, v]) => ({ name: groups.find(g => g.id === id)?.name || 'Group', v })).sort((a, b) => b.v - a.v)
+  return (
+    <section className="spend" id="spending" aria-label="Your spending">
+      <div className="spend-head">
+        <button className="icon-btn" aria-label="Previous month" disabled={month <= first} onClick={() => setMonth(shiftMonth(month, -1))}><Ic.back /></button>
+        <div className="spend-month">{monthName(month, true)}</div>
+        <button className="icon-btn" aria-label="Next month" disabled={month >= now} onClick={() => setMonth(shiftMonth(month, 1))}><Ic.chev /></button>
+      </div>
+      <div className="spend-label">{month === now ? 'You’ve spent this month' : 'You spent'}</div>
+      <div className="spend-total num">{money(total, cur)}</div>
+      <p className="spend-sub">
+        {total === 0 ? 'Nothing in this month.' : `Your share of ${these.length} expense${these.length === 1 ? '' : 's'} · settle-ups don’t count`}
+        {delta !== null && <span className={delta > 0 ? 'neg' : 'pos'}> · {delta > 0 ? '▲' : '▼'} {Math.abs(delta)}% vs {monthName(prevYm)}</span>}
+      </p>
+      {otherCurrencies && <p className="tiny faint">Showing {cur} groups only.</p>}
+      {these.length > 0 && <Charts expenses={these} cur={cur} stats={false} />}
+      {byGroup.length > 1 && <>
+        <div className="eyebrow mt">By group</div>
+        <div className="card list">
+          {byGroup.map(g => (
+            <div className="row" key={g.name}>
+              <div className="grow"><b className="truncate">{g.name}</b>
+                <div className="gbar"><span style={{ transform: `scaleX(${g.v / byGroup[0].v})` }} /></div></div>
+              <div className="num">{money(g.v, cur)}</div>
+            </div>
+          ))}
+        </div>
+      </>}
+    </section>
+  )
+}
+
+// First week of a month (or when opened from the recap notification): last month in one card.
+function RecapCard({ items, groups, cur, overall, onSee }) {
+  const forced = sessionStorage.getItem('splitit.recap')
+  const ym = forced || shiftMonth(monthOf(todayISO()), -1)
+  const [hidden, setHidden] = useState(() => !!localStorage.getItem('splitit.recapSeen.' + ym))
+  const these = inMonth(items, ym)
+  if (hidden || !these.length || (!forced && new Date().getDate() > 7)) return null
+  const total = sumCents(these), nGroups = new Set(these.map(i => i.group_id)).size
+  const top = these.reduce((a, b) => (b.amount_cents > a.amount_cents ? b : a))
+  const topGroup = groups.length > 1 && groups.find(g => g.id === top.group_id)?.name
+  const dismiss = () => { localStorage.setItem('splitit.recapSeen.' + ym, '1'); sessionStorage.removeItem('splitit.recap'); setHidden(true) }
+  return (
+    <div className="recap" role="region" aria-label={`${monthName(ym)} recap`}>
+      <div className="recap-t">🗓️ {monthName(ym)} recap</div>
+      <p>You spent <b className="num">{money(total, cur)}</b> across {nGroups} group{nGroups === 1 ? '' : 's'}. Biggest: <b>{top.description}</b> <span className="num">{money(top.amount_cents, cur)}</span>{topGroup ? ` in ${topGroup}` : ''}.</p>
+      {overall !== 0 && <p>{overall > 0 ? 'You’re still owed' : 'You still owe'} <b className="num">{money(Math.abs(overall), cur)}</b> overall.</p>}
+      <div className="recap-actions">
+        <button className="btn sm" onClick={() => onSee(ym)}>See {monthName(ym)}</button>
+        <button className="linkbtn" onClick={dismiss}>Dismiss</button>
+      </div>
+    </div>
   )
 }
 

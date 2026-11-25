@@ -443,3 +443,20 @@ details.more summary:hover{color:var(--fg)}
 .paybtn{margin-top:12px}
 .paypick{margin:12px 0 0}
 .payhelp .btn.ghost.block{margin-top:4px}
+
+/* home: monthly spending + recap */
+.spend{margin-top:28px;scroll-margin-top:16px}
+.spend-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.spend-head .icon-btn:disabled{opacity:.35}
+.spend-head .icon-btn svg{width:18px;height:18px}
+.spend-month{font-family:var(--disp);font-weight:600;font-size:1.08rem}
+.spend-label{font-size:.88rem;color:var(--muted);font-weight:500}
+.spend-total{font-family:var(--disp);font-size:2.3rem;font-weight:600;letter-spacing:-.03em;line-height:1.1;margin:4px 0}
+.spend-sub{margin:0 0 14px;font-size:.88rem;color:var(--muted)}
+.gbar{height:6px;border-radius:999px;background:var(--surface-2);margin-top:7px;overflow:hidden}
+.gbar span{display:block;height:100%;background:var(--accent);border-radius:999px;transform-origin:left}
+.recap{margin-top:18px;padding:18px;border-radius:var(--r);background:color-mix(in srgb,var(--accent) 9%,var(--surface));box-shadow:var(--sh-1)}
+.recap-t{font-family:var(--disp);font-weight:600;font-size:1.05rem;margin-bottom:6px}
+.recap p{margin:4px 0;font-size:.93rem;line-height:1.5}
+.recap-actions{display:flex;align-items:center;gap:14px;margin-top:12px}
+.recap-actions .linkbtn{color:var(--muted)}

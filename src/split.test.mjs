@@ -1,6 +1,6 @@
 // Run with: npm test  (plain Node, no test framework)
 import assert from 'node:assert'
-import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents, myShares, shiftMonth, inMonth, sumCents } from './split.js'
 
 // equal split of 10.00 among 3 -> 3.34/3.33/3.33, remainder to payer
 let a = allocate(1000, [{ id: 'x', w: 1 }, { id: 'y', w: 1 }, { id: 'z', w: 1 }], 'x')
@@ -79,4 +79,16 @@ assert.equal(guessCode('€'), 'EUR'); assert.equal(guessCode('$'), 'CAD'); asse
 assert.equal(convertCents(5000, 1.5707), 7854) // €50 -> $78.54 (78.535 rounds up)
 assert.equal(convertCents(1, 0.004), 0)
 
-console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency checks passed')
+// spending = my share, not the full bill; settle-ups never count
+const exps = [{ id: 'e1', description: 'Groceries', category: 'food', group_id: 'g', spent_on: '2026-11-03' },
+  { id: 'e2', description: 'Rent', category: 'home', group_id: 'g', spent_on: '2026-10-01' },
+  { id: 'e3', description: 'Taxi', category: 'transport', group_id: 'g', spent_on: '2026-11-20' }]
+const spl = [{ expense_id: 'e1', member_id: 'me', owed_cents: 4000 }, { expense_id: 'e1', member_id: 'sam', owed_cents: 4000 },
+  { expense_id: 'e2', member_id: 'me', owed_cents: 90000 }, { expense_id: 'e3', member_id: 'sam', owed_cents: 3000 }]
+const mine = myShares('me', exps, spl)
+assert.equal(mine.length, 2) // Taxi was all Sam's share
+assert.equal(sumCents(inMonth(mine, '2026-11')), 4000) // half the $80 groceries, not $80
+assert.equal(sumCents(inMonth(mine, '2026-10')), 90000)
+assert.equal(shiftMonth('2026-01', -1), '2025-12'); assert.equal(shiftMonth('2026-12', 1), '2027-01')
+
+console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency/spending checks passed')

@@ -173,3 +173,24 @@ export function guessCode(symbol) {
 }
 // Convert cents at a rate (e.g. 1.5707), rounded to the nearest cent.
 export const convertCents = (cents, rate) => Math.round(cents * rate)
+
+// Your spending = your share of each expense (whoever paid). Settle-ups are paying people back, not spending.
+// Returns one item per split of yours: { id, description, category, spent_on, group_id, amount_cents }.
+export function myShares(me, expenses, splits) {
+  const byId = Object.fromEntries(expenses.map(e => [e.id || e.$id, e]))
+  const out = []
+  for (const s of splits) {
+    const e = s.member_id === me && byId[s.expense_id]
+    if (!e || !(s.owed_cents > 0)) continue
+    out.push({ id: s.expense_id, description: e.description, category: e.category, group_id: e.group_id, amount_cents: s.owed_cents,
+      spent_on: e.spent_on || String(e.created_at || e.$createdAt || '').slice(0, 10) })
+  }
+  return out
+}
+export const monthOf = iso => String(iso || '').slice(0, 7) // 'YYYY-MM'
+export function shiftMonth(ym, n) {
+  const [y, m] = ym.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7)
+}
+export const inMonth = (items, ym) => items.filter(i => monthOf(i.spent_on) === ym)
+export const sumCents = items => items.reduce((s, i) => s + i.amount_cents, 0)

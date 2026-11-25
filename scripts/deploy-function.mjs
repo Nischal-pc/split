@@ -19,6 +19,7 @@ const FUNCTIONS = {
   // Runs on expense changes, and signed-in users can call it for reminders (it checks group membership).
   'notify-expense': {
     name: 'Notify group of expense changes', execute: ['users'],
+    interval: 1440, // daily (free plan has no cron); the function only sends the monthly recap on the 1st
     events: ['create', 'update', 'delete'].map(e => `databases.${DB}.collections.expenses.documents.*.${e}`),
     vars: { APPWRITE_API_KEY: key, APP_DB_ID: DB, VAPID_PUBLIC_KEY: process.env.VITE_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
       VAPID_SUBJECT: process.env.VAPID_SUBJECT || 'https://split-lake-tau.vercel.app' },
@@ -34,13 +35,24 @@ const fns = new Functions(new Client().setEndpoint(endpoint).setProject(project)
 async function ensureFunction() {
   try {
     await fns.get(FID)
-    await fns.update(FID, CFG.name, 'node-18.0', CFG.execute, CFG.events, '', 15, true, true, 'src/main.js', 'npm install')
+    await fns.update(FID, CFG.name, 'node-18.0', CFG.execute, CFG.events, '', 30, true, true, 'src/main.js', 'npm install')
     console.log('function exists (settings updated)')
   } catch (e) {
     if (e.code !== 404) throw e
-    await fns.create(FID, CFG.name, 'node-18.0', CFG.execute, CFG.events, '', 15, true, true, 'src/main.js', 'npm install')
+    await fns.create(FID, CFG.name, 'node-18.0', CFG.execute, CFG.events, '', 30, true, true, 'src/main.js', 'npm install')
     console.log('function created')
   }
+  if (CFG.interval) await setInterval_(CFG.interval)
+}
+// Free-plan schedules are intervals in minutes; the installed SDK predates them, so call the REST API directly.
+async function setInterval_(minutes) {
+  const r = await fetch(`${endpoint}/functions/${FID}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Appwrite-Project': project, 'X-Appwrite-Key': key },
+    body: JSON.stringify({ name: CFG.name, runtime: 'node-18.0', execute: CFG.execute, events: CFG.events, interval: minutes, timeout: 30, enabled: true, logging: true, entrypoint: 'src/main.js', commands: 'npm install' }),
+  })
+  const j = await r.json()
+  if (!r.ok) throw new Error('could not set interval: ' + (j.message || r.status))
+  console.log('schedule: every', j.interval ?? minutes, 'minutes')
 }
 async function setVar(k, v) {
   const list = await fns.listVariables(FID)
