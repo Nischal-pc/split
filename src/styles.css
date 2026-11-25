@@ -492,3 +492,21 @@ details.more summary:hover{color:var(--fg)}
 .budget-links{display:flex;gap:18px;margin-top:-6px}
 .budget-links .linkbtn{font-size:.84rem;color:var(--muted)}
 .budget-links .danger-text{color:var(--neg)}
+
+/* insights */
+.spend-tap{display:block;width:100%;text-align:left;background:none;border:none;padding:0;border-radius:var(--r-sm)}
+.spend-more{display:inline-flex;align-items:center;gap:2px;font-size:.84rem;font-weight:600;color:var(--accent);margin:2px 0 6px}
+.spend-more svg{width:15px;height:15px}
+.ins-hero{margin-bottom:6px}
+.ins-forecast{margin:0;font-size:.9rem;color:var(--muted)}
+.ins-h{font-family:var(--disp);font-size:1.02rem;font-weight:600;margin:26px 0 10px}
+.ins-card{background:var(--surface);border-radius:var(--r);box-shadow:var(--sh-1);padding:16px}
+.ins-card p{margin:0 0 6px;font-size:.93rem;line-height:1.5}
+.ins-card p:last-child{margin-bottom:0}
+.ins-split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.ins-num{font-family:var(--disp);font-size:1.35rem;font-weight:600;margin-top:2px}
+.ins-bar{display:flex;gap:3px;height:8px;border-radius:999px;overflow:hidden;margin:12px 0 10px;background:var(--surface-2)}
+.ins-bar .fixed{background:var(--accent)}.ins-bar .oneoff{background:var(--warn)}
+.chip{font-weight:600;font-size:.72rem}
+.chip.up{color:var(--neg)}.chip.down{color:var(--pos)}
+.cap{text-transform:capitalize}

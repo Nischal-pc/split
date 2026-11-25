@@ -1,6 +1,6 @@
 // Run with: npm test  (plain Node, no test framework)
 import assert from 'node:assert'
-import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents, myShares, shiftMonth, inMonth, sumCents, budgetStatus } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents, myShares, shiftMonth, inMonth, sumCents, budgetStatus, monthInsights, daysBetween } from './split.js'
 
 // equal split of 10.00 among 3 -> 3.34/3.33/3.33, remainder to payer
 let a = allocate(1000, [{ id: 'x', w: 1 }, { id: 'y', w: 1 }, { id: 'z', w: 1 }], 'x')
@@ -100,4 +100,29 @@ assert.equal(budgetStatus(90000, 80000, '2026-11', '2026-11-29').pace, 'over')
 assert.equal(budgetStatus(70000, 80000, '2026-10', '2026-11-15').pace, 'ok') // past month: no pace, just under budget
 assert.equal(budgetStatus(10000, 80000, '2026-02', '2026-02-28').daysLeft, 0)
 
-console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency/spending/budget checks passed')
+// insights for November: I paid $80 groceries (my share 40) and $1000 rent template (share 500, repeats); Sam paid $30 taxi (my share 15)
+const iexp = [
+  { id: 'a', description: 'Groceries', category: 'food', group_id: 'g1', paid_by: 'me', amount_cents: 8000, spent_on: '2026-11-03' },
+  { id: 'b', description: 'Rent', category: 'home', group_id: 'g1', paid_by: 'me', amount_cents: 100000, spent_on: '2026-11-01', repeat: 'monthly' },
+  { id: 'c', description: 'Taxi', category: 'transport', group_id: 'g2', paid_by: 'sam', amount_cents: 3000, spent_on: '2026-11-10' },
+  { id: 'd', description: 'Groceries', category: 'food', group_id: 'g1', paid_by: 'sam', amount_cents: 2000, spent_on: '2026-10-12' }]
+const ispl = [{ expense_id: 'a', member_id: 'me', owed_cents: 4000 }, { expense_id: 'b', member_id: 'me', owed_cents: 50000 },
+  { expense_id: 'c', member_id: 'me', owed_cents: 1500 }, { expense_id: 'd', member_id: 'me', owed_cents: 1000 }]
+const ins = monthInsights({ me: 'me', ym: '2026-11', today: '2026-11-15', items: myShares('me', iexp, ispl), expenses: iexp })
+assert.equal(ins.total, 55500)
+assert.deepEqual(ins.categories.map(c => [c.cat, c.cents, c.delta]), [['home', 50000, 50000], ['food', 4000, 3000], ['transport', 1500, 1500]])
+assert.deepEqual(ins.fronted, { paid: 108000, forOthers: 54000, count: 2 }) // paid 1080, own share 540
+assert.equal(ins.forecast.cents, 111000) // 555 in 15 of 30 days -> 1110
+assert.deepEqual([ins.fixed, ins.oneOff], [50000, 5500])
+assert.deepEqual(ins.groupsPay.map(g => [g.group_id, Math.round(g.pct * 100)]), [['g1', 100], ['g2', 0]])
+assert.equal(ins.top[0].description, 'Rent')
+assert.equal(monthInsights({ me: 'me', ym: '2026-10', today: '2026-11-15', items: myShares('me', iexp, ispl), expenses: iexp }).forecast, null)
+assert.equal(daysBetween('2026-10-03', '2026-11-25'), 53)
+// "waiting since" on a person balance
+const sinceG = { id: 'g', team_id: 't', name: 'G', currency: '$', members: M('me', 'sam'),
+  expenses: [{ id: 'x', paid_by: 'me', amount_cents: 2000, spent_on: '2026-09-01' }, { id: 'y', paid_by: 'me', amount_cents: 4000, spent_on: '2026-10-03' }],
+  splits: [{ expense_id: 'x', member_id: 'sam', owed_cents: 2000 }, { expense_id: 'y', member_id: 'sam', owed_cents: 4000 }],
+  settlements: [{ from_member: 'sam', to_member: 'me', amount_cents: 2000, $createdAt: '2026-09-20T10:00:00Z' }] }
+assert.equal(peopleBalances('me', [sinceG])[0].since, '2026-10-03') // the Sept one was paid back
+
+console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency/spending/budget/insight checks passed')

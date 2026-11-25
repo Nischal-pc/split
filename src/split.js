@@ -121,6 +121,12 @@ export function peopleBalances(me, groups) {
       const p = acc[key] ||= { user_id: other, name: m?.display_name || 'Someone', email: m?.email || '', cur: g.currency, net: 0, groups: [], parts: [] }
       const amt = s.to === me ? s.amount : -s.amount
       p.net += amt
+      // open since: first expense after the last payment between the two of you in this group
+      const day = x => String(x.spent_on || x.created_at || x.$createdAt || '').slice(0, 10)
+      const lastPaid = g.settlements.filter(t => [t.from_member, t.to_member].includes(me) && [t.from_member, t.to_member].includes(other))
+        .reduce((d, t) => (day(t) > d ? day(t) : d), '')
+      const since = g.expenses.map(day).filter(d => d && d >= lastPaid).sort()[0]
+      if (since && (!p.since || since < p.since)) p.since = since
       if (!p.groups.includes(g.name)) p.groups.push(g.name)
       // per-group piece, so "settle all" can record one payment in each group
       p.parts.push({ group: { id: g.id, team_id: g.team_id, name: g.name }, amount: amt })
@@ -181,12 +187,14 @@ export const convertCents = (cents, rate) => Math.round(cents * rate)
 // Returns one item per split of yours: { id, description, category, spent_on, group_id, amount_cents }.
 export function myShares(me, expenses, splits) {
   const byId = Object.fromEntries(expenses.map(e => [e.id || e.$id, e]))
+  const repeating = new Set(expenses.filter(e => e.repeat).map(e => e.group_id + '|' + e.description))
   const out = []
   for (const s of splits) {
     const e = s.member_id === me && byId[s.expense_id]
     if (!e || !(s.owed_cents > 0)) continue
     out.push({ id: s.expense_id, description: e.description, category: e.category, group_id: e.group_id, amount_cents: s.owed_cents,
-      spent_on: e.spent_on || String(e.created_at || e.$createdAt || '').slice(0, 10) })
+      spent_on: e.spent_on || String(e.created_at || e.$createdAt || '').slice(0, 10),
+      recurring: repeating.has(e.group_id + '|' + e.description) })
   }
   return out
 }
@@ -209,3 +217,37 @@ export function budgetStatus(spent, budget, ym, today) {
   const pace = spent > budget ? 'over' : current && spent > expected * 1.1 ? 'ahead' : 'ok'
   return { pct: budget ? spent / budget : 0, left: budget - spent, daysLeft: current ? days - day : 0, expected, pace }
 }
+
+// Everything the Insights screen shows for one month, in one currency.
+// items: your shares (myShares) in that currency; expenses: full expenses of groups in that currency.
+export function monthInsights({ me, ym, today, items, expenses }) {
+  const these = inMonth(items, ym), prev = inMonth(items, shiftMonth(ym, -1))
+  const total = sumCents(these)
+  const byCat = list => list.reduce((a, i) => { a[i.category || 'general'] = (a[i.category || 'general'] || 0) + i.amount_cents; return a }, {})
+  const now = byCat(these), before = byCat(prev)
+  const categories = Object.keys({ ...now, ...before }).map(cat => ({ cat, cents: now[cat] || 0, delta: (now[cat] || 0) - (before[cat] || 0) }))
+    .filter(c => c.cents > 0).sort((a, b) => b.cents - a.cents)
+  // forecast only makes sense for the month in progress
+  let forecast = null
+  if (today.slice(0, 7) === ym && total > 0) {
+    const [y, m] = ym.split('-').map(Number), days = new Date(Date.UTC(y, m, 0)).getUTCDate(), day = +today.slice(8, 10)
+    forecast = { cents: Math.round(total / day * days), days, day }
+  }
+  // fronting: what you paid upfront for other people this month
+  const monthExp = expenses.filter(e => monthOf(e.spent_on || e.created_at) === ym)
+  const mineIds = new Set(these.map(i => i.id))
+  const paidByMe = monthExp.filter(e => e.paid_by === me)
+  const paidCents = paidByMe.reduce((t, e) => t + e.amount_cents, 0)
+  const myShareOfPaid = these.filter(i => paidByMe.some(e => (e.id || e.$id) === i.id)).reduce((t, i) => t + i.amount_cents, 0)
+  const fronted = { paid: paidCents, forOthers: paidCents - myShareOfPaid, count: paidByMe.length }
+  // who pays in each group (share of the group's spending this month that you paid for)
+  const groupsPay = Object.values(monthExp.reduce((a, e) => {
+    const g = a[e.group_id] ||= { group_id: e.group_id, total: 0, mine: 0, count: 0 }
+    g.total += e.amount_cents; g.count++; if (e.paid_by === me) g.mine += e.amount_cents
+    return a
+  }, {})).filter(g => g.total > 0).map(g => ({ ...g, pct: g.mine / g.total })).sort((a, b) => b.total - a.total)
+  const fixed = sumCents(these.filter(i => i.recurring))
+  const top = [...these].sort((a, b) => b.amount_cents - a.amount_cents).slice(0, 5)
+  return { total, categories, forecast, fronted, groupsPay, fixed, oneOff: total - fixed, top, involved: mineIds.size }
+}
+export const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000)

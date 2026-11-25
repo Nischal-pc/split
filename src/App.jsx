@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents, monthOf, shiftMonth, inMonth, sumCents, budgetStatus } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents, monthOf, shiftMonth, inMonth, sumCents, budgetStatus, monthInsights, daysBetween } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -500,7 +500,7 @@ function HomeTab({ user, onOpen, onAccount }) {
       {spendCur && spend.length > 0 && <>
         <RecapCard items={spendItems} groups={gs} cur={spendCur} overall={oneCur ? overall : 0} onSee={ym => { setMonth(ym); document.getElementById('spending')?.scrollIntoView({ behavior: 'smooth' }) }} />
         <MonthSpending items={spendItems} groups={gs} cur={spendCur} month={month} setMonth={setMonth} otherCurrencies={currencies.length > 1}
-          budget={budgets[spendCur] || 0} onBudget={async c => setBudgets(await db.setBudget(spendCur, c))} />
+          budget={budgets[spendCur] || 0} onBudget={async c => setBudgets(await db.setBudget(spendCur, c))} onInsights={() => setSheet('insights')} />
       </>}
 
       {groups === null ? <><div className="eyebrow mt">Your groups</div><div className="muted pad">Loading…</div></>
@@ -520,6 +520,8 @@ function HomeTab({ user, onOpen, onAccount }) {
         </>}
 
       {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
+      {sheet === 'insights' && <Insights month={month} cur={spendCur} items={spendItems} groups={gs} people={people || []} budget={budgets[spendCur] || 0} user={user}
+        onClose={() => setSheet(null)} onOpenGroup={id => { setSheet(null); onOpen(id) }} onSettle={p => setSheet({ settleAll: p })} />}
       {sheet?.settleAll && <SettleAll person={sheet.settleAll} user={user} onClose={() => setSheet(null)} onDone={() => { setSheet(null); load() }} />}
       {sheet === 'friend' && <AddFriend user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
       {sheet === 'add' && <QuickAdd groups={gs} user={user} onClose={() => setSheet(null)} onDone={() => { setSheet(null); load() }} />}
@@ -1562,7 +1564,7 @@ function Charts({ expenses, cur, members, stats = true }) {
 const monthName = (ym, year) => new Date(ym + '-01T00:00').toLocaleDateString(undefined, year ? { month: 'long', year: 'numeric' } : { month: 'long' })
 
 // Home: your share of spending for one month, with ‹ › to move between months.
-function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies, budget, onBudget }) {
+function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies, budget, onBudget, onInsights }) {
   const now = monthOf(todayISO())
   const first = items.reduce((m, i) => (monthOf(i.spent_on) < m ? monthOf(i.spent_on) : m), now)
   const these = inMonth(items, month), total = sumCents(these)
@@ -1577,8 +1579,11 @@ function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies, b
         <div className="spend-month">{monthName(month, true)}</div>
         <button className="icon-btn" aria-label="Next month" disabled={month >= now} onClick={() => setMonth(shiftMonth(month, 1))}><Ic.chev /></button>
       </div>
-      <div className="spend-label">{month === now ? 'You’ve spent this month' : 'You spent'}</div>
-      <div className="spend-total num">{money(total, cur)}</div>
+      <button className="spend-tap" onClick={onInsights} aria-label={`See insights for ${monthName(month, true)}`}>
+        <div className="spend-label">{month === now ? 'You’ve spent this month' : 'You spent'}</div>
+        <div className="spend-total num">{money(total, cur)}</div>
+        <div className="spend-more">See insights <Ic.chev /></div>
+      </button>
       <p className="spend-sub">
         {total === 0 ? 'Nothing in this month.' : `Your share of ${these.length} expense${these.length === 1 ? '' : 's'} · settle-ups don’t count`}
         {delta !== null && <span className={delta > 0 ? 'neg' : 'pos'}> · {delta > 0 ? '▲' : '▼'} {Math.abs(delta)}% vs {monthName(prevYm)}</span>}
@@ -1599,6 +1604,94 @@ function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies, b
         </div>
       </>}
     </section>
+  )
+}
+
+// Full-screen breakdown of one month, opened by tapping the month's total on Home.
+function Insights({ month, cur, items, groups, people, budget, user, onClose, onOpenGroup, onSettle }) {
+  const [expenses, setExpenses] = useState(null)
+  useEffect(() => { db.listAllExpenses().then(setExpenses).catch(() => setExpenses([])) }, [])
+  const gname = id => groups.find(g => g.id === id)?.name || 'Group'
+  const inCur = new Set(groups.filter(g => g.currency === cur).map(g => g.id))
+  const today = todayISO()
+  const ins = monthInsights({ me: user.id, ym: month, today, items, expenses: (expenses || []).filter(e => inCur.has(e.group_id)) })
+  const owedToMe = people.filter(p => p.net > 0 && p.cur === cur).map(p => ({ ...p, days: p.since ? daysBetween(p.since, today) : null }))
+    .sort((a, b) => (b.days || 0) - (a.days || 0))
+  const delta = d => d === 0 ? null : <span className={'chip ' + (d > 0 ? 'up' : 'down')}>{d > 0 ? '▲' : '▼'} {money(Math.abs(d), cur)}</span>
+  return (
+    <Sheet title={`${monthName(month)} insights`} onClose={onClose}>
+      <div className="ins-hero">
+        <div className="spend-total num">{money(ins.total, cur)}</div>
+        <p className="spend-sub">Your share of {ins.involved} expense{ins.involved === 1 ? '' : 's'} in {monthName(month, true)}</p>
+        {ins.forecast && <p className="ins-forecast">At this pace: <b className="num">~{money(ins.forecast.cents, cur)}</b> by {monthName(month)} {ins.forecast.days}
+          {budget > 0 && <> · <span className={ins.forecast.cents > budget ? 'neg' : 'pos'}>{ins.forecast.cents > budget ? `${money(ins.forecast.cents - budget, cur)} over` : `${money(budget - ins.forecast.cents, cur)} under`} your budget</span></>}</p>}
+      </div>
+
+      <h3 className="ins-h">Where it went</h3>
+      {ins.categories.length ? <div className="card list">
+        {ins.categories.map(c => (
+          <div className="row" key={c.cat}>
+            <div className="badge">{CATS[c.cat] || '🧾'}</div>
+            <div className="grow"><span className="cap">{c.cat}</span><div className="tiny faint">{Math.round(c.cents / ins.total * 100)}% of the month</div></div>
+            <div className="right"><div className="num">{money(c.cents, cur)}</div>
+              {c.cents === c.delta ? <div className="tiny faint">new this month</div>
+                : delta(c.delta) && <div className="tiny">{delta(c.delta)} vs {monthName(shiftMonth(month, -1)).slice(0, 3)}</div>}</div>
+          </div>
+        ))}
+      </div> : <p className="split-hint">Nothing spent this month.</p>}
+
+      <h3 className="ins-h">Money you fronted</h3>
+      {expenses === null ? <p className="split-hint">Loading…</p>
+        : ins.fronted.count ? <div className="ins-card">
+          <p>You paid <b className="num">{money(ins.fronted.paid, cur)}</b> upfront for {ins.fronted.count} expense{ins.fronted.count === 1 ? '' : 's'}.</p>
+          <p><b className="num">{money(ins.fronted.forOthers, cur)}</b> of that was for other people{ins.fronted.forOthers > 0 ? ' — it shows up in what they owe you.' : '.'}</p>
+        </div> : <p className="split-hint">You didn’t pay upfront for anyone this month.</p>}
+
+      <h3 className="ins-h">Waiting to be paid back</h3>
+      {owedToMe.length ? <div className="card list">
+        {owedToMe.map(p => (
+          <button className="row rowbtn" key={p.user_id + p.cur} onClick={() => onSettle(p)}>
+            <div className="grow"><b className="truncate">{p.name}</b>
+              <div className={'tiny ' + (p.days > 30 ? 'neg' : 'muted')}>{p.days == null ? 'open balance' : p.days < 1 ? 'since today' : p.days === 1 ? 'since yesterday' : `waiting ${p.days} days`} · {p.groups.join(', ')}</div></div>
+            <div className="num pos">{money(p.net, cur)}</div>
+            <div className="chev"><Ic.chev /></div>
+          </button>
+        ))}
+      </div> : <p className="split-hint">Nobody owes you anything right now. 🎉</p>}
+
+      <h3 className="ins-h">Who pays in each group</h3>
+      {expenses === null ? <p className="split-hint">Loading…</p>
+        : ins.groupsPay.length ? <div className="card list">
+          {ins.groupsPay.map(g => (
+            <div className="row" key={g.group_id}>
+              <div className="grow"><b className="truncate">{gname(g.group_id)}</b>
+                <div className="tiny muted">You paid {Math.round(g.pct * 100)}% of {money(g.total, cur)} · {g.count} expense{g.count === 1 ? '' : 's'}</div>
+                <div className="gbar"><span style={{ transform: `scaleX(${g.pct})` }} /></div></div>
+            </div>
+          ))}
+        </div> : <p className="split-hint">No group spending this month.</p>}
+
+      <h3 className="ins-h">Fixed vs one-off</h3>
+      {ins.total > 0 ? <div className="ins-card">
+        <div className="ins-split">
+          <div><div className="tiny muted">🔁 Recurring</div><div className="num ins-num">{money(ins.fixed, cur)}</div></div>
+          <div><div className="tiny muted">One-off</div><div className="num ins-num">{money(ins.oneOff, cur)}</div></div>
+        </div>
+        <div className="ins-bar"><span style={{ flexGrow: ins.fixed }} className="fixed" /><span style={{ flexGrow: ins.oneOff }} className="oneoff" /></div>
+        <p className="tiny muted">{ins.fixed ? 'Recurring = expenses set to repeat (rent, subscriptions). One-off is where cutting back is easiest.' : 'No repeating expenses this month. Set rent or subscriptions to repeat to track them here.'}</p>
+      </div> : <p className="split-hint">Nothing spent this month.</p>}
+
+      <h3 className="ins-h">Biggest expenses</h3>
+      {ins.top.length ? <div className="card list">
+        {ins.top.map(t => (
+          <button className="row rowbtn" key={t.id} onClick={() => onOpenGroup(t.group_id)}>
+            <div className="badge">{CATS[t.category] || '🧾'}</div>
+            <div className="grow"><b className="truncate">{t.description}</b><div className="tiny muted">{gname(t.group_id)} · {fmtDate(t.spent_on)}</div></div>
+            <div className="num">{money(t.amount_cents, cur)}</div>
+          </button>
+        ))}
+      </div> : <p className="split-hint">Nothing spent this month.</p>}
+    </Sheet>
   )
 }
 
