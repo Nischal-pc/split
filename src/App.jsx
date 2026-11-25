@@ -1570,7 +1570,8 @@ function Charts({ expenses, cur, members, stats = true }) {
   const tip = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, color: 'var(--fg)', fontSize: 13 }
 
   function exportCsv() {
-    const esc = v => '"' + String(v).replace(/"/g, '""') + '"'
+    // quote every cell; text starting with = + - @ would run as a formula in Excel/Sheets (CSV injection)
+    const esc = v => { let t = String(v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"' }
     const lines = ['Date,Description,Category,Amount']
     expenses.forEach(e => lines.push([e.spent_on || '', esc(e.description || ''), e.category, (e.amount_cents / 100).toFixed(2)].join(',')))
     const a = document.createElement('a')

@@ -21,7 +21,11 @@ export default async ({ req, res, log, error }) => {
   // Send one payload to every device a user has; forget devices that no longer exist.
   async function pushTo(userIds, makePayload) {
     if (!userIds.length) return { sent: 0, devices: 0 }
+    // user_id is written by the browser, so a member could register their own phone under someone else's id.
+    // Only trust a device whose row permissions were granted by that same user (Appwrite won't let anyone
+    // grant permissions in another user's name).
     const subs = (await databases.listDocuments(DB, 'push_subs', [Query.equal('user_id', userIds), Query.limit(500)])).documents
+      .filter(s => (s.$permissions || []).includes(`read("user:${s.user_id}")`))
     let sent = 0
     await Promise.all(subs.map(async s => {
       try { await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(makePayload(s)), { TTL: 86400 }); sent++ }
