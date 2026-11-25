@@ -12,10 +12,36 @@ const teamPerms = teamId => [
   Permission.delete(Role.team(teamId)),
 ]
 
+/* ---------- offline cache ---------- */
+// Last good result of each read is kept on the device so the app still opens with no signal.
+// Signing out wipes it. Writes are not cached, except new expenses (see the outbox below).
+const OFF = 'splitit.cache.'
+export const isNetErr = e => !navigator.onLine || !e?.code || /network|failed to fetch|load failed/i.test(e?.message || '')
+async function cached(key, fn) {
+  try {
+    const v = await fn()
+    try { localStorage.setItem(OFF + key, JSON.stringify(v)) } catch { /* storage full: still fine online */ }
+    return v
+  } catch (e) {
+    const saved = isNetErr(e) && localStorage.getItem(OFF + key)
+    if (saved) return JSON.parse(saved)
+    throw e
+  }
+}
+function clearCache() { Object.keys(localStorage).filter(k => k.startsWith(OFF) || k === OUTBOX).forEach(k => localStorage.removeItem(k)) }
+
 /* ---------- auth ---------- */
 export async function getUser() {
-  try { const a = await account.get(); return { id: a.$id, email: a.email, name: a.name } }
-  catch { return null }
+  try {
+    const a = await account.get()
+    const u = { id: a.$id, email: a.email, name: a.name }
+    localStorage.setItem(OFF + 'user', JSON.stringify(u))
+    return u
+  } catch (e) {
+    // offline: stay signed in as the last user; a real 401 means signed out
+    const saved = isNetErr(e) && localStorage.getItem(OFF + 'user')
+    return saved ? JSON.parse(saved) : null
+  }
 }
 export async function signUp(email, password, name) {
   await account.create(ID.unique(), email, password, name || email.split('@')[0])
@@ -26,7 +52,7 @@ export function signInWithGoogle() {
   // Full-page redirect to Google and back; the session is set on return.
   account.createOAuth2Session(OAuthProvider.Google, window.location.origin, window.location.origin)
 }
-export async function signOut() { try { await account.deleteSession('current') } catch { /* ignore */ } }
+export async function signOut() { clearCache(); try { await account.deleteSession('current') } catch { /* ignore */ } }
 export async function recover(email) { await account.createRecovery(email, window.location.origin) }
 export async function confirmRecovery(userId, secret, password) { await account.updateRecovery(userId, secret, password) }
 
@@ -51,7 +77,7 @@ export function recoveryFromUrl() {
 export function clearUrlParams() { window.history.replaceState({}, '', window.location.pathname) }
 
 /* ---------- groups (one Appwrite Team per group) ---------- */
-export async function listGroups(userId) {
+async function _listGroups(userId) {
   const t = await teams.list()
   const ids = t.teams.map(x => x.$id)
   if (!ids.length) return []
@@ -72,7 +98,7 @@ export async function listGroups(userId) {
 // kind: undefined for a normal group, 'friend' for a 1:1 friend (non-group expenses).
 // Overall balance with each person across all my groups (see peopleBalances).
 // shortcut: re-reads the same collections as listGroups and one membership list per group; fine for personal use, batch with listGroups if Home gets slow.
-export async function listPeople(userId) {
+async function _listPeople(userId) {
   const t = await teams.list()
   const ids = t.teams.map(x => x.$id)
   if (!ids.length) return []
@@ -109,7 +135,7 @@ export async function joinByCode(code, name) {
 export async function setDefaultSplit(groupId, split) {
   await databases.updateDocument(DB, C.groups, groupId, { default_split: split ? JSON.stringify(split) : '' })
 }
-export async function getGroup(groupId) {
+async function _getGroup(groupId) {
   return norm(await databases.getDocument(DB, C.groups, groupId))
 }
 // Backfill a join code for groups made before codes existed.
@@ -119,12 +145,12 @@ export async function ensureJoinCode(group) {
   try { await databases.updateDocument(DB, C.groups, group.id, { join_code: code }); return code } catch { return null }
 }
 // All expenses across the user's groups (for home charts).
-export async function listAllExpenses() {
+async function _listAllExpenses() {
   const r = await databases.listDocuments(DB, C.expenses, [Query.orderDesc('$createdAt'), Query.limit(2000)])
   return r.documents.map(norm)
 }
 // Recent activity across all the user's groups (RLS limits to groups they belong to).
-export async function listRecentActivity(limit = 20) {
+async function _listRecentActivity(limit = 20) {
   const r = await databases.listDocuments(DB, C.activity, [Query.orderDesc('$createdAt'), Query.limit(limit)])
   return r.documents.map(norm)
 }
@@ -138,7 +164,7 @@ export async function deleteGroup(group) {
 // They take part in splits like anyone else; mergeGuest() hands their history to a real account.
 export const parseGuests = g => { try { return JSON.parse(g.guests || '[]') } catch { return [] } }
 export const isGuest = id => String(id).startsWith('guest_')
-export async function groupMembers(group) {
+async function _groupMembers(group) {
   const team = await listMembers(group.team_id)
   return [...team, ...parseGuests(group).map(x => ({ user_id: x.id, display_name: x.name, guest: true, confirmed: true, membership_id: x.id, roles: [], email: '' }))]
 }
@@ -201,7 +227,7 @@ export async function removeMember(teamId, membershipId) { await teams.deleteMem
 export async function leaveGroup(teamId, myMembershipId) { await teams.deleteMembership(teamId, myMembershipId) }
 
 /* ---------- group data ---------- */
-export async function loadGroupData(groupId) {
+async function _loadGroupData(groupId) {
   const [exp, spl, set, act] = await Promise.all([
     databases.listDocuments(DB, C.expenses, [Query.equal('group_id', groupId), Query.orderDesc('$createdAt'), Query.limit(500)]),
     databases.listDocuments(DB, C.splits, [Query.equal('group_id', groupId), Query.limit(2000)]),
@@ -363,4 +389,44 @@ export async function disablePush() {
   await databases.deleteDocument(DB, C.push, await subDocId(sub.endpoint)).catch(() => {})
   await sub.unsubscribe()
   return 'off'
+}
+
+// Cached readers (fall back to the last saved copy when offline).
+export const listGroups = (...a) => cached('groups', () => _listGroups(...a))
+export const listPeople = (...a) => cached('people', () => _listPeople(...a))
+export const getGroup = (...a) => cached('group.' + a[0], () => _getGroup(...a))
+export const listAllExpenses = (...a) => cached('allexp', () => _listAllExpenses(...a))
+export const listRecentActivity = (...a) => cached('activity', () => _listRecentActivity(...a))
+export const groupMembers = (...a) => cached('members.' + (a[0].id || a[0].$id), () => _groupMembers(...a))
+export const loadGroupData = (...a) => cached('data.' + a[0], () => _loadGroupData(...a))
+
+/* ---------- offline outbox ---------- */
+// New expenses added with no connection wait here and upload when the device is back online.
+const OUTBOX = 'splitit.outbox'
+const readOutbox = () => { try { return JSON.parse(localStorage.getItem(OUTBOX) || '[]') } catch { return [] } }
+const writeOutbox = q => { localStorage.setItem(OUTBOX, JSON.stringify(q)); window.dispatchEvent(new Event('splitit-outbox')) }
+export const pendingFor = groupId => readOutbox().filter(x => !groupId || x.group.id === groupId)
+export async function addExpenseOrQueue(group, payload, userId, actorName) {
+  if (navigator.onLine) {
+    try { return await addExpense(group, payload, userId) } catch (e) { if (!isNetErr(e)) throw e }
+  }
+  writeOutbox([...readOutbox(), { key: 'q' + Date.now(), group: { id: group.id, team_id: group.team_id }, payload, userId, actorName }])
+  return 'queued'
+}
+let flushing = false
+export async function flushOutbox() {
+  if (flushing || !navigator.onLine) return 0
+  flushing = true
+  let done = 0
+  try {
+    for (const item of readOutbox()) {
+      try {
+        await addExpense(item.group, item.payload, item.userId)
+        logActivity(item.group, item.actorName || 'Someone', `added “${item.payload.description}” (synced)`)
+        writeOutbox(readOutbox().filter(x => x.key !== item.key)); done++
+      } catch (e) { if (isNetErr(e)) break; writeOutbox(readOutbox().filter(x => x.key !== item.key)) } // drop items the server rejects
+    }
+  } finally { flushing = false }
+  if (done) window.dispatchEvent(new Event('splitit-synced'))
+  return done
 }

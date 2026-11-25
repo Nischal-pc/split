@@ -102,6 +102,12 @@ export default function App() {
     sessionStorage.removeItem('splitit.join')
     db.joinByCode(code, displayName(user)).then(setGroupId).catch(e => setJoinErr(e.message || 'That invite link didn’t work'))
   }, [user])
+  useEffect(() => {
+    if (!user) return
+    db.flushOutbox()
+    window.addEventListener('online', db.flushOutbox)
+    return () => window.removeEventListener('online', db.flushOutbox)
+  }, [user])
   const onAuthed = async () => { await db.acceptInviteFromUrl().catch(() => {}); setUser(await db.getUser()) }
 
   const signOut = async () => { await db.signOut(); setGroupId(null); setUser(null) }
@@ -114,6 +120,18 @@ export default function App() {
     <Shell user={user} onOpen={setGroupId} onSignOut={signOut} />
     {joinErr && <Toast text={joinErr} tone="bad" onDone={() => setJoinErr('')} />}
   </>
+}
+
+// Thin bar at the top while the device has no connection.
+export function OfflineBar() {
+  const [online, setOnline] = useState(navigator.onLine)
+  useEffect(() => {
+    const up = () => setOnline(true), down = () => setOnline(false)
+    window.addEventListener('online', up); window.addEventListener('offline', down)
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down) }
+  }, [])
+  if (online) return null
+  return <div className="offbar" role="status">You’re offline · showing saved data. New expenses will sync later.</div>
 }
 
 // Short-lived message above the bottom bar, with an optional action (e.g. Undo).
@@ -349,7 +367,11 @@ function HomeTab({ user, onOpen, onAccount }) {
     try { setExpenses(await db.listAllExpenses()) } catch { setExpenses([]) }
     try { setPeople(await db.listPeople(user.id)) } catch { setPeople([]) }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    window.addEventListener('splitit-synced', load)
+    return () => window.removeEventListener('splitit-synced', load)
+  }, [])
 
   const first = displayName(user).split(/[\s@]/)[0]
   const gs = groups || []
@@ -581,6 +603,13 @@ function GroupView({ groupId, user, onBack }) {
   const [tab, setTab] = useState('expenses')
   const [reminded, setReminded] = useState({})
   const [undo, setUndo] = useState(null) // { expense, splits } just deleted
+  const [pending, setPending] = useState(() => db.pendingFor(groupId))
+  useEffect(() => {
+    const onQ = () => setPending(db.pendingFor(groupId))
+    const onSync = () => load().catch(() => {})
+    window.addEventListener('splitit-outbox', onQ); window.addEventListener('splitit-synced', onSync)
+    return () => { window.removeEventListener('splitit-outbox', onQ); window.removeEventListener('splitit-synced', onSync) }
+  }, [groupId])
 
   // Re-create a just-deleted expense (new id; its comments are not restored).
   async function restore() {
@@ -647,6 +676,9 @@ function GroupView({ groupId, user, onBack }) {
         </div>
       </div>
 
+      {pending.length > 0 && <div className="note syncnote" role="status">
+        <b>{pending.length} expense{pending.length > 1 ? 's' : ''} waiting to sync</b> · {pending.map(p => `“${p.payload.description}” ${money(p.payload.amount_cents, group.currency)}`).join(', ')}.
+        {' '}{navigator.onLine ? 'Uploading…' : 'It’ll upload when you’re back online.'}</div>}
       {members.some(m => !m.user_id) && <div className="err" role="alert"><Ic.alert />
         <span>Other members are hidden by Appwrite, so balances here can’t be worked out. In Appwrite Console → Auth → Security → Memberships privacy, turn on <b>User ID</b> and <b>Name</b>.</span></div>}
       <MyBalance net={nets[user.id] || 0} cur={cur} />
@@ -1031,8 +1063,10 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
     } else if (edit?.repeat) { extra.repeat = ''; extra.next_on = '' }
     const payload = { description: desc.trim(), amount_cents: amt, paid_by: eff.P, category: cat, spent_on: date, owed, extra }
     try {
+      if (edit && !navigator.onLine) throw new Error('You’re offline. Editing needs a connection — try again when you’re back online.')
+      const queued = !edit && await db.addExpenseOrQueue(group, payload, user.id, myName) === 'queued'
       if (edit) await db.updateExpense(group, edit.id, payload)
-      else await db.addExpense(group, payload, user.id)
+      if (queued) return onClose() // saved on this device; uploads when back online
       // remember (or forget) this group's default split; amounts aren't reusable so 'exact' never becomes a default
       const wantDef = !quick && saveDef && type !== 'exact' && type !== 'items'
       if (wantDef) await db.setDefaultSplit(group.id, { type, txt, out }).catch(() => {})
