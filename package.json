@@ -10,7 +10,8 @@
     "test": "node src/split.test.mjs",
     "setup": "node scripts/setup-appwrite.mjs",
     "deploy:fn": "node scripts/deploy-function.mjs",
-    "add:gmail": "node scripts/add-gmail.mjs"
+    "add:gmail": "node scripts/add-email.mjs gmail",
+    "add:brevo": "node scripts/add-email.mjs brevo"
   },
   "dependencies": {
     "appwrite": "^14.0.1",
