@@ -12,8 +12,11 @@ export const databases = new Databases(client)
 export const teams = new Teams(client)
 export const functions = new Functions(client)
 
+// Web Push public key (safe to ship; the private half lives only in the notify function's settings).
+export const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || 'BKul6gVpcHXTzOMczD1IH69LNIr-YGf121CQ2L84ndKQ5n2L3CGBniIcTDXLhjz05kSRRbFPDVifEbRilf7yQY4'
+
 export const DB = import.meta.env.VITE_APPWRITE_DB_ID || 'splitit'
 export const C = {
   groups: 'groups', expenses: 'expenses', splits: 'splits',
-  settlements: 'settlements', messages: 'messages', activity: 'activity', comments: 'comments',
+  settlements: 'settlements', messages: 'messages', activity: 'activity', comments: 'comments', push: 'push_subs',
 }

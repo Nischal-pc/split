@@ -39,6 +39,7 @@ const Ic = {
   pulse: () => <Svg><path d="M3 12h4l3 8 4-16 3 8h4" /></Svg>,
   user: () => <Svg><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></Svg>,
   share: () => <Svg width="17" height="17"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" /><path d="M16 6l-4-4-4 4M12 2v13" /></Svg>,
+  bell: () => <Svg><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Svg>,
   plus: () => <Svg><path d="M12 5v14M5 12h14" /></Svg>,
   userPlus: () => <Svg><circle cx="10" cy="8" r="4" /><path d="M2 21c0-4 4-6 8-6s8 2 8 6M19 4v6M16 7h6" /></Svg>,
   ticket: () => <Svg><path d="M3 9a3 3 0 0 0 0 6v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a3 3 0 0 1 0-6V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z" /><path d="M14 5v14" strokeDasharray="2 2" /></Svg>,
@@ -85,12 +86,17 @@ export default function App() {
   }
   useEffect(() => {
     // ?join=CODE invite links: remember the code through sign-up / log-in, then join.
-    const code = new URLSearchParams(window.location.search).get('join')
-    if (code) { sessionStorage.setItem('splitit.join', code.trim().toUpperCase()); db.clearUrlParams() }
+    const q = new URLSearchParams(window.location.search)
+    const code = q.get('join'), open = q.get('group') // ?group= comes from tapping a notification
+    if (code) sessionStorage.setItem('splitit.join', code.trim().toUpperCase())
+    if (open) sessionStorage.setItem('splitit.open', open)
+    if (code || open) db.clearUrlParams()
     boot()
   }, [])
   const [joinErr, setJoinErr] = useState('')
   useEffect(() => {
+    const open = user && sessionStorage.getItem('splitit.open')
+    if (open) { sessionStorage.removeItem('splitit.open'); setGroupId(open) }
     const code = user && sessionStorage.getItem('splitit.join')
     if (!code) return
     sessionStorage.removeItem('splitit.join')
@@ -164,6 +170,53 @@ function GlobalActivity({ user }) {
   )
 }
 
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent)
+const PUSH_HINT = {
+  unsupported: () => isIOS() ? 'On iPhone: tap Share → Add to Home Screen, then open SplitIt from your Home Screen' : 'This browser can’t show notifications',
+  denied: () => 'Blocked. Allow notifications for SplitIt in your phone’s Settings',
+  off: () => 'Get notified when someone adds or edits an expense',
+  on: () => 'On for this device',
+}
+// Notifications switch (Account tab).
+function PushRow({ user }) {
+  const [st, setSt] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  useEffect(() => { db.pushState().then(setSt).catch(() => setSt('unsupported')) }, [])
+  async function flip() {
+    setBusy(true); setErr('')
+    try { setSt(st === 'on' ? await db.disablePush() : await db.enablePush(user.id)) }
+    catch { setErr('Couldn’t turn on notifications in this browser. Try Safari (Home Screen app) or Chrome.') } finally { setBusy(false) }
+  }
+  if (!st) return null
+  const can = st === 'on' || st === 'off'
+  return (
+    <div className="row">
+      <Ic.bell />
+      <div className="grow">Notifications<div className="tiny muted">{err || PUSH_HINT[st]()}</div></div>
+      {can && <button className={'switch' + (st === 'on' ? ' on' : '')} role="switch" aria-checked={st === 'on'} aria-label="Notifications" disabled={busy} onClick={flip}><span /></button>}
+    </div>
+  )
+}
+// One-time nudge on Home while notifications are off.
+function PushNudge({ user }) {
+  const [st, setSt] = useState(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { if (!localStorage.getItem('splitit.pushNudge')) db.pushState().then(setSt).catch(() => {}) }, [])
+  const hide = () => { localStorage.setItem('splitit.pushNudge', '1'); setSt(null) }
+  if (st !== 'off') return null
+  return (
+    <div className="nudge">
+      <Ic.bell />
+      <div className="grow"><b>Know when friends add expenses</b><div className="tiny muted">Get a notification when someone in your groups adds or edits one.</div></div>
+      <div className="nudge-actions">
+        <button className="btn sm" disabled={busy} onClick={async () => { setBusy(true); try { if (await db.enablePush(user.id) === 'on') hide() } catch { /* ignore */ } setBusy(false) }}>Turn on</button>
+        <button className="linkbtn" onClick={hide}>Not now</button>
+      </div>
+    </div>
+  )
+}
+
 function AccountTab({ user, onSignOut }) {
   const toggleTheme = () => {
     const cur = document.documentElement.getAttribute('data-theme')
@@ -178,6 +231,7 @@ function AccountTab({ user, onSignOut }) {
         <div className="sublabel muted">{user.email}</div>
       </div>
       <div className="card list">
+        <PushRow user={user} />
         <button className="row rowbtn" onClick={toggleTheme}><Ic.moon /><div className="grow">Toggle light / dark</div><div className="chev"><Ic.chev /></div></button>
         <button className="row rowbtn" onClick={onSignOut}><Ic.logout /><div className="grow">Sign out</div><div className="chev"><Ic.chev /></div></button>
       </div>
@@ -355,6 +409,7 @@ function HomeTab({ user, onOpen, onAccount }) {
         <button className="qbtn" onClick={() => setSheet('friend')}><Ic.userPlus /><span>Add friend</span></button>
         <button className="qbtn" onClick={() => setSheet('join')}><Ic.ticket /><span>Join group</span></button>
       </div>
+      {gs.length > 0 && <PushNudge user={user} />}
 
       {people && people.length > 0 && <>
         <div className="eyebrow mt">Balances with people</div>

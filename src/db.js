@@ -1,6 +1,6 @@
 // All backend access lives here so the UI never touches Appwrite directly.
 import { ID, Query, Permission, Role, OAuthProvider } from 'appwrite'
-import { client, account, databases, teams, functions, DB, C } from './appwrite.js'
+import { client, account, databases, teams, functions, DB, C, VAPID_PUBLIC_KEY } from './appwrite.js'
 import { dueDates, nextDate, peopleBalances } from './split.js'
 
 const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
@@ -236,7 +236,7 @@ export async function addExpense(group, { description, amount_cents, paid_by, ca
   return exp.$id
 }
 export async function updateExpense(group, expenseId, { description, amount_cents, paid_by, category, spent_on, owed, extra = {} }) {
-  await databases.updateDocument(DB, C.expenses, expenseId, { description, amount_cents, paid_by, category, spent_on, ...extra })
+  await databases.updateDocument(DB, C.expenses, expenseId, { description, amount_cents, paid_by, category, spent_on, ...extra, edited_at: new Date().toISOString() })
   const old = await databases.listDocuments(DB, C.splits, [Query.equal('expense_id', expenseId), Query.limit(2000)])
   await Promise.all(old.documents.map(d => databases.deleteDocument(DB, C.splits, d.$id)))
   await Promise.all(Object.entries(owed).map(([member_id, owed_cents]) =>
@@ -328,4 +328,39 @@ export async function fetchRate(from, to) {
   const rate = (await r.json()).rates?.[to]
   if (!rate) throw new Error('No rate for ' + from)
   return rate
+}
+
+/* ---------- push notifications ---------- */
+// 'unsupported' (e.g. iPhone Safari tab: add to Home Screen first) | 'denied' | 'on' | 'off'
+export async function pushState() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return 'unsupported'
+  if (Notification.permission === 'denied') return 'denied'
+  const reg = await navigator.serviceWorker.getRegistration()
+  return (await reg?.pushManager.getSubscription()) ? 'on' : 'off'
+}
+const b64ToBytes = s => { const p = '='.repeat((4 - s.length % 4) % 4); const r = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(r, c => c.charCodeAt(0)) }
+// One document per device; the id is derived from the endpoint so re-subscribing updates it.
+async function subDocId(endpoint) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint)))
+  return 'p' + [...h].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 35)
+}
+export async function enablePush(userId) {
+  if (await Notification.requestPermission() !== 'granted') return 'denied'
+  const reg = await navigator.serviceWorker.register('/sw.js')
+  await navigator.serviceWorker.ready
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC_KEY) })
+  const j = sub.toJSON(), id = await subDocId(j.endpoint)
+  const data = { user_id: userId, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }
+  const mine = [Permission.read(Role.user(userId)), Permission.update(Role.user(userId)), Permission.delete(Role.user(userId))]
+  try { await databases.createDocument(DB, C.push, id, data, mine) }
+  catch (e) { if (e.code === 409) await databases.updateDocument(DB, C.push, id, data); else throw e }
+  return 'on'
+}
+export async function disablePush() {
+  const reg = await navigator.serviceWorker.getRegistration()
+  const sub = await reg?.pushManager.getSubscription()
+  if (!sub) return 'off'
+  await databases.deleteDocument(DB, C.push, await subDocId(sub.endpoint)).catch(() => {})
+  await sub.unsubscribe()
+  return 'off'
 }

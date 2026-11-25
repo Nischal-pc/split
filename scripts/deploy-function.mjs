@@ -1,4 +1,4 @@
-// Deploys the join-by-code Appwrite Function from functions/join-by-code.
+// Deploys an Appwrite Function from functions/<id> (join-by-code or notify-expense).
 // Needs the API key in .env to also have: functions.read/write, and (at runtime,
 // used by the function) teams.read/write + databases.read + documents.read.
 import 'dotenv/config'
@@ -11,15 +11,34 @@ const endpoint = process.env.VITE_APPWRITE_ENDPOINT
 const project = process.env.VITE_APPWRITE_PROJECT_ID
 const key = process.env.APPWRITE_API_KEY
 const DB = process.env.VITE_APPWRITE_DB_ID || 'splitit'
-const FID = 'join-by-code'
 if (!endpoint || !project || !key) { console.error('Missing env'); process.exit(1) }
+
+// Usage: npm run deploy:fn [join-by-code | notify-expense]   (default: join-by-code)
+const FUNCTIONS = {
+  'join-by-code': { name: 'Join by code', execute: ['users'], events: [], vars: { APPWRITE_API_KEY: key, APP_DB_ID: DB } },
+  // Runs on expense changes only; nobody can call it directly (execute: []).
+  'notify-expense': {
+    name: 'Notify group of expense changes', execute: [],
+    events: ['create', 'update', 'delete'].map(e => `databases.${DB}.collections.expenses.documents.*.${e}`),
+    vars: { APPWRITE_API_KEY: key, APP_DB_ID: DB, VAPID_PUBLIC_KEY: process.env.VITE_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
+      VAPID_SUBJECT: process.env.VAPID_SUBJECT || 'https://split-lake-tau.vercel.app' },
+  },
+}
+const FID = process.argv[2] || 'join-by-code'
+const CFG = FUNCTIONS[FID]
+if (!CFG) { console.error('Unknown function', FID); process.exit(1) }
+if (Object.values(CFG.vars).some(v => !v)) { console.error('Missing env for', FID, '— run: npx web-push generate-vapid-keys, see .env.example'); process.exit(1) }
 
 const fns = new Functions(new Client().setEndpoint(endpoint).setProject(project).setKey(key))
 
 async function ensureFunction() {
-  try { await fns.get(FID); console.log('function exists') }
-  catch {
-    await fns.create(FID, 'Join by code', 'node-18.0', ['users'], [], '', 15, true, true, 'src/main.js', 'npm install')
+  try {
+    await fns.get(FID)
+    await fns.update(FID, CFG.name, 'node-18.0', CFG.execute, CFG.events, '', 15, true, true, 'src/main.js', 'npm install')
+    console.log('function exists (settings updated)')
+  } catch (e) {
+    if (e.code !== 404) throw e
+    await fns.create(FID, CFG.name, 'node-18.0', CFG.execute, CFG.events, '', 15, true, true, 'src/main.js', 'npm install')
     console.log('function created')
   }
 }
@@ -33,11 +52,10 @@ async function setVar(k, v) {
 
 async function main() {
   await ensureFunction()
-  await setVar('APPWRITE_API_KEY', key)
-  await setVar('APP_DB_ID', DB)
+  for (const [k, v] of Object.entries(CFG.vars)) await setVar(k, v)
 
   if (existsSync('code.tar.gz')) rmSync('code.tar.gz')
-  execSync('tar -czf code.tar.gz -C functions/join-by-code .', { stdio: 'inherit' })
+  execSync(`tar -czf code.tar.gz -C functions/${FID} .`, { stdio: 'inherit' })
   console.log('packaged code.tar.gz')
 
   const dep = await fns.createDeployment(FID, InputFile.fromPath('code.tar.gz', 'code.tar.gz'), true)

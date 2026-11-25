@@ -420,3 +420,14 @@ details.more summary:hover{color:var(--fg)}
 .fxrate input{width:84px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;background:var(--bg);text-align:right;font-weight:600}
 .fxrate input:focus{outline:none;border-color:var(--accent)}
 .fxbox .linkbtn{font-size:.82rem}
+
+/* notifications */
+.switch{width:50px;height:30px;flex:none;border:none;border-radius:999px;background:var(--line);position:relative;transition:background .2s;padding:0}
+.switch span{position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:999px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.16,1,.3,1)}
+.switch.on{background:var(--accent)}
+.switch.on span{transform:translateX(20px)}
+.nudge{display:flex;align-items:flex-start;gap:12px;margin-top:18px;padding:16px;border-radius:var(--r);background:var(--surface);box-shadow:var(--sh-1)}
+.nudge>svg{color:var(--accent);flex:none;margin-top:2px}
+.nudge b{font-weight:600}
+.nudge-actions{display:flex;flex-direction:column;align-items:center;gap:8px;flex:none}
+.nudge-actions .linkbtn{color:var(--muted);font-size:.82rem}
