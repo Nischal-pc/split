@@ -630,10 +630,15 @@ function GroupView({ groupId, user, onBack }) {
     const text = `🔔 Reminder: ${nameOf(members, s.from)}, you owe ${nameOf(members, s.to)} ${money(s.amount, group.currency)}. Settle up when you can!`
     try {
       await db.sendMessage(group, user.id, displayName(user), text)
-      // also email them (not possible for guests without an account); chat still works if email fails
-      const emailed = !db.isGuest(s.from) && await db.emailReminder(group.id, s.from, s.amount).catch(() => false)
-      logActivity(group, displayName(user), `reminded ${nameOf(members, s.from)} to pay ${money(s.amount, group.currency)}${emailed ? ' (email sent)' : ''}`)
-      setReminded(r => ({ ...r, [s.from + s.to]: emailed ? 'email' : 'chat' }))
+      // also a phone notification (and email if a sender is set up); guests have no account, so chat only
+      const real = !db.isGuest(s.from)
+      const [pushed, emailed] = await Promise.all([
+        real ? db.pushReminder(group.id, s.from, s.amount).catch(() => 0) : 0,
+        real ? db.emailReminder(group.id, s.from, s.amount).catch(() => false) : false,
+      ])
+      const how = [pushed && 'notification', emailed && 'email'].filter(Boolean).join(' + ')
+      logActivity(group, displayName(user), `reminded ${nameOf(members, s.from)} to pay ${money(s.amount, group.currency)}${how ? ` (${how})` : ''}`)
+      setReminded(r => ({ ...r, [s.from + s.to]: pushed ? 'push' : emailed ? 'email' : 'chat' }))
     } catch { /* ignore */ }
   }
 
@@ -708,7 +713,7 @@ function GroupView({ groupId, user, onBack }) {
               <div className="grow"><b>{nameOf(members, s.from)}</b> owes <b>{nameOf(members, s.to)}</b></div>
               <div className="num">{money(s.amount, cur)}</div>
               {s.from !== user.id && <button className="btn ghost sm" title={'Remind ' + nameOf(members, s.from)} disabled={reminded[s.from + s.to]}
-                onClick={() => remind(s)}>{reminded[s.from + s.to] === 'email' ? 'Emailed ✓' : reminded[s.from + s.to] ? 'Reminded ✓' : '🔔 Remind'}</button>}
+                onClick={() => remind(s)}>{{ push: 'Notified ✓', email: 'Emailed ✓', chat: 'Reminded ✓' }[reminded[s.from + s.to]] || '🔔 Remind'}</button>}
               <button className="btn sm" onClick={() => setSheet({ settle: s })}>Settle</button>
             </div>
           ))}

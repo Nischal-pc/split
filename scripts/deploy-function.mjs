@@ -16,9 +16,9 @@ if (!endpoint || !project || !key) { console.error('Missing env'); process.exit(
 // Usage: npm run deploy:fn [join-by-code | notify-expense]   (default: join-by-code)
 const FUNCTIONS = {
   'join-by-code': { name: 'Join by code', execute: ['users'], events: [], vars: { APPWRITE_API_KEY: key, APP_DB_ID: DB } },
-  // Runs on expense changes only; nobody can call it directly (execute: []).
+  // Runs on expense changes, and signed-in users can call it for reminders (it checks group membership).
   'notify-expense': {
-    name: 'Notify group of expense changes', execute: [],
+    name: 'Notify group of expense changes', execute: ['users'],
     events: ['create', 'update', 'delete'].map(e => `databases.${DB}.collections.expenses.documents.*.${e}`),
     vars: { APPWRITE_API_KEY: key, APP_DB_ID: DB, VAPID_PUBLIC_KEY: process.env.VITE_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
       VAPID_SUBJECT: process.env.VAPID_SUBJECT || 'https://split-lake-tau.vercel.app' },

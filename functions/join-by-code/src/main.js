@@ -46,6 +46,9 @@ export default async ({ req, res, log, error }) => {
       const mems = (await teams.listMemberships(group.team_id, [Query.limit(100)])).memberships
       const me = mems.find(m => m.userId === userId), them = mems.find(m => m.userId === toUserId)
       if (!me || !them) return res.json({ ok: false, error: 'Not in this group' }, 403)
+      // Appwrite accepts a message even with no sender configured and then fails silently; check first.
+      const senders = await messaging.listProviders([Query.equal('type', 'email'), Query.equal('enabled', true), Query.limit(1)])
+      if (!senders.total) return res.json({ ok: false, error: 'No email sender set up' })
       const esc = s => String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
       const money = '' + (group.currency || '$') + (amount / 100).toFixed(2)
       const fromName = me.userName || 'A friend', toName = them.userName || 'there'

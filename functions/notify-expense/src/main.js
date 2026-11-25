@@ -1,5 +1,6 @@
-// Appwrite Function: push a notification to the rest of the group when an expense is
-// added, edited or deleted. Triggered by database events on the expenses collection.
+// Appwrite Function: push notifications for SplitIt.
+// 1) Database events on expenses: tell the rest of the group about adds / edits / deletes.
+// 2) Called by a signed-in user with { action: 'remind', groupId, toUserId, amount }: nudge one person to pay.
 // Variables: APPWRITE_API_KEY, APP_DB_ID, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT.
 import { Client, Databases, Teams, Query } from 'node-appwrite'
 import webpush from 'web-push'
@@ -16,10 +17,54 @@ export default async ({ req, res, log, error }) => {
   const teams = new Teams(client)
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'https://split-lake-tau.vercel.app', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY)
 
+  // Send one payload to every device a user has; forget devices that no longer exist.
+  async function pushTo(userIds, makePayload) {
+    if (!userIds.length) return { sent: 0, devices: 0 }
+    const subs = (await databases.listDocuments(DB, 'push_subs', [Query.equal('user_id', userIds), Query.limit(500)])).documents
+    let sent = 0
+    await Promise.all(subs.map(async s => {
+      try { await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(makePayload(s)), { TTL: 86400 }); sent++ }
+      catch (e) {
+        if (e.statusCode === 404 || e.statusCode === 410) await databases.deleteDocument(DB, 'push_subs', s.$id).catch(() => {})
+        else error(`push failed (${e.statusCode}): ${e.body || e.message}`)
+      }
+    }))
+    return { sent, devices: subs.length }
+  }
+
+  let body = req.body
+  if (typeof body === 'string') { try { body = JSON.parse(body || '{}') } catch { body = {} } }
+
+  // ---- 2) payment reminder from one member to another ----
+  if (body?.action === 'remind' && !req.headers['x-appwrite-event']) {
+    const callerId = req.headers['x-appwrite-user-id']
+    const groupId = String(body.groupId || ''), toUserId = String(body.toUserId || '')
+    const amount = Math.round(Number(body.amount))
+    if (!callerId) return res.json({ ok: false, error: 'Please sign in first' }, 401)
+    if (!groupId || !toUserId || toUserId === callerId || !(amount > 0 && amount < 1e9)) return res.json({ ok: false, error: 'Bad request' }, 400)
+    try {
+      const group = await databases.getDocument(DB, 'groups', groupId)
+      const mems = (await teams.listMemberships(group.team_id, [Query.limit(100)])).memberships
+      const me = mems.find(m => m.userId === callerId), them = mems.find(m => m.userId === toUserId)
+      if (!me || !them) return res.json({ ok: false, error: 'Not in this group' }, 403)
+      const r = await pushTo([toUserId], () => ({
+        title: `SplitIt · ${group.name}`,
+        body: `🔔 ${me.userName || 'A friend'} is reminding you: you owe ${money(amount, group.currency || '$')}. Tap to settle up.`,
+        url: `/?group=${group.$id}`,
+        tag: `remind-${group.$id}`,
+      }))
+      log(`remind ${group.$id}: sent ${r.sent}/${r.devices}`)
+      return res.json({ ok: true, ...r })
+    } catch (e) {
+      error(e.message)
+      return res.json({ ok: false, error: 'Could not send the reminder' }, 500)
+    }
+  }
+
+  // ---- 1) expense added / edited / deleted ----
   const event = String(req.headers['x-appwrite-event'] || '')
   const kind = event.endsWith('.create') ? 'added' : event.endsWith('.delete') ? 'deleted' : event.endsWith('.update') ? 'edited' : ''
-  let doc = req.body
-  if (typeof doc === 'string') { try { doc = JSON.parse(doc) } catch { doc = {} } }
+  const doc = body
   if (!kind || !doc?.group_id) return res.json({ ok: true, skipped: 'not an expense event' })
 
   // Background updates (recurring next_on, linking a guest) don't set edited_at; only real edits do.
@@ -35,8 +80,6 @@ export default async ({ req, res, log, error }) => {
     const recipients = mems.map(m => m.userId).filter(id => id && id !== actorId)
     if (!recipients.length) return res.json({ ok: true, sent: 0 })
 
-    const subs = (await databases.listDocuments(DB, 'push_subs', [Query.equal('user_id', recipients), Query.limit(500)])).documents
-    if (!subs.length) return res.json({ ok: true, sent: 0, note: 'nobody in the group has notifications on' })
 
     // Splits are written just after the expense; wait briefly so each person sees their own share.
     let shares = {}
@@ -47,24 +90,17 @@ export default async ({ req, res, log, error }) => {
     }
 
     const cur = group.currency || '$'
-    let sent = 0
-    await Promise.all(subs.map(async s => {
-      const share = shares[s.user_id]
+    const { sent, devices } = await pushTo(recipients, sub => {
+      const share = shares[sub.user_id]
       const tail = kind !== 'deleted' && share ? ` · your share ${money(share, cur)}` : ''
-      const payload = JSON.stringify({
+      return {
         title: `SplitIt · ${group.name}`,
         body: `${nameOf(actorId)} ${kind} “${doc.description}” · ${money(doc.amount_cents, cur)}${tail}`,
         url: `/?group=${group.$id}`,
         tag: doc.$id,
-      })
-      try { await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, { TTL: 86400 }); sent++ }
-      catch (e) {
-        // 404/410: the phone unsubscribed or the app was removed; forget this device.
-        if (e.statusCode === 404 || e.statusCode === 410) await databases.deleteDocument(DB, 'push_subs', s.$id).catch(() => {})
-        else error(`push failed (${e.statusCode}): ${e.body || e.message}`)
       }
-    }))
-    log(`${kind} ${doc.$id}: sent ${sent}/${subs.length}`)
+    })
+    log(`${kind} ${doc.$id}: sent ${sent}/${devices}`)
     return res.json({ ok: true, sent })
   } catch (e) {
     error(e.message)

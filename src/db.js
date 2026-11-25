@@ -333,6 +333,11 @@ export function subscribeComments(expenseId, onNew) {
   })
 }
 
+// Phone-notification reminder (server checks both people are in the group). Returns how many devices got it.
+export async function pushReminder(groupId, toUserId, amount) {
+  const ex = await functions.createExecution('notify-expense', JSON.stringify({ action: 'remind', groupId, toUserId, amount }), false)
+  try { return JSON.parse(ex.responseBody || '{}').sent || 0 } catch { return 0 }
+}
 // Email a payment reminder (server checks both people are in the group). Returns true if sent.
 export async function emailReminder(groupId, toUserId, amount) {
   const ex = await functions.createExecution('join-by-code', JSON.stringify({ action: 'remind', groupId, toUserId, amount }), false)
