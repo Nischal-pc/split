@@ -545,7 +545,8 @@ details.more summary:hover{color:var(--fg)}
 .side-h{font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:16px 12px 6px}
 .side-group{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:none;border-radius:12px;background:none;text-align:left;transition:background .14s}
 .side-group:hover{background:var(--surface-2)}
-.side-group.on{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--accent)}
+.side-group.on{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.side-group.on .side-name{color:var(--accent);font-weight:600}
 .side-ico{font-size:1rem;flex:none}
 .side-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.92rem;font-weight:500}
 .side-bal{flex:none;font-size:.8rem;font-weight:600}
