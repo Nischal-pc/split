@@ -460,3 +460,14 @@ details.more summary:hover{color:var(--fg)}
 .recap p{margin:4px 0;font-size:.93rem;line-height:1.5}
 .recap-actions{display:flex;align-items:center;gap:14px;margin-top:12px}
 .recap-actions .linkbtn{color:var(--muted)}
+
+/* settled + archived */
+.settled{padding:18px;border-radius:var(--r);margin-bottom:18px;background:color-mix(in srgb,var(--pos) 10%,var(--surface));box-shadow:var(--sh-1)}
+.settled-t{font-family:var(--disp);font-weight:600;font-size:1.15rem;margin-bottom:4px}
+.settled p{margin:0 0 12px;font-size:.92rem;line-height:1.5}
+.settled-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.archived{margin-top:22px}
+.archived summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:6px 0 12px}
+.archived summary::-webkit-details-marker{display:none}
+.archived summary::before{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .2s}
+.archived[open] summary::before{transform:rotate(45deg)}

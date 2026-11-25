@@ -393,6 +393,7 @@ function ResetPassword({ rec, onDone }) {
 function HomeTab({ user, onOpen, onAccount }) {
   const [groups, setGroups] = useState(null)
   const [spend, setSpend] = useState([]) // your share of each expense
+  const [archived, setArchivedIds] = useState([])
   const [month, setMonth] = useState(() => sessionStorage.getItem('splitit.recap') || monthOf(todayISO()))
   const [people, setPeople] = useState(null)
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
@@ -400,6 +401,7 @@ function HomeTab({ user, onOpen, onAccount }) {
   async function load() {
     try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) }
     try { setSpend(await db.listMySpending(user.id)) } catch { setSpend([]) }
+    try { setArchivedIds(await db.getArchived()) } catch { setArchivedIds([]) }
     try { setPeople(await db.listPeople(user.id)) } catch { setPeople([]) }
   }
   useEffect(() => {
@@ -417,6 +419,9 @@ function HomeTab({ user, onOpen, onAccount }) {
   const currencies = [...new Set(gs.map(g => g.currency))]
   const oneCur = currencies.length === 1 ? currencies[0] : null
   const where = n => n === 0 ? 'nothing outstanding' : `in ${n} ${n === 1 ? 'group' : 'groups'}`
+  // Archived groups drop to the bottom, but come back on their own if you owe or are owed again.
+  const isShelved = g => archived.includes(g.id) && g.myNet === 0
+  const active = gs.filter(g => !isShelved(g)), shelved = gs.filter(isShelved)
   // Spending is shown in one currency: the only one, or the one most of your spending is in.
   const curOf = id => gs.find(g => g.id === id)?.currency
   const spendCur = oneCur || Object.entries(spend.reduce((a, i) => { const c = curOf(i.group_id); if (c) a[c] = (a[c] || 0) + i.amount_cents; return a }, {})).sort((a, b) => b[1] - a[1])[0]?.[0]
@@ -496,14 +501,18 @@ function HomeTab({ user, onOpen, onAccount }) {
 
       {groups === null ? <><div className="eyebrow mt">Your groups</div><div className="muted pad">Loading…</div></>
         : <>
-          {groups.some(g => g.kind === 'friend') && <>
+          {active.some(g => g.kind === 'friend') && <>
             <div className="eyebrow mt">Friends</div>
-            <GroupRows groups={groups.filter(g => g.kind === 'friend')} icon="🧑" onOpen={onOpen} />
+            <GroupRows groups={active.filter(g => g.kind === 'friend')} icon="🧑" onOpen={onOpen} />
           </>}
           <div className="eyebrow mt">Your groups</div>
-          {groups.some(g => g.kind !== 'friend')
-            ? <GroupRows groups={groups.filter(g => g.kind !== 'friend')} icon="👥" onOpen={onOpen} />
-            : <div className="empty"><div className="big">🧾</div>No groups yet.<br />Create one and invite your friends.</div>}
+          {active.some(g => g.kind !== 'friend')
+            ? <GroupRows groups={active.filter(g => g.kind !== 'friend')} icon="👥" onOpen={onOpen} />
+            : <div className="empty"><div className="big">🧾</div>{shelved.length ? 'Nothing active right now.' : <>No groups yet.<br />Create one and invite your friends.</>}</div>}
+          {shelved.length > 0 && <details className="archived">
+            <summary>Archived ({shelved.length})</summary>
+            <GroupRows groups={shelved} icon="🗂️" onOpen={onOpen} />
+          </details>}
         </>}
 
       {sheet === 'new' && <NewGroup user={user} onClose={() => setSheet(null)} onDone={id => { setSheet(null); onOpen(id) }} />}
@@ -643,6 +652,13 @@ function GroupView({ groupId, user, onBack }) {
   const [reminded, setReminded] = useState({})
   const [undo, setUndo] = useState(null) // { expense, splits } just deleted
   const [pending, setPending] = useState(() => db.pendingFor(groupId))
+  const [archived, setArchivedState] = useState(false)
+  useEffect(() => { db.getArchived().then(a => setArchivedState(a.includes(groupId))).catch(() => {}) }, [groupId])
+  async function toggleArchive() {
+    const on = !archived
+    setArchivedState(on)
+    try { await db.setArchived(groupId, on) } catch { setArchivedState(!on) }
+  }
   useEffect(() => {
     const onQ = () => setPending(db.pendingFor(groupId))
     const onSync = () => load().catch(() => {})
@@ -727,6 +743,7 @@ function GroupView({ groupId, user, onBack }) {
         {' '}{navigator.onLine ? 'Uploading…' : 'It’ll upload when you’re back online.'}</div>}
       {members.some(m => !m.user_id) && <div className="err" role="alert"><Ic.alert />
         <span>Other members are hidden by Appwrite, so balances here can’t be worked out. In Appwrite Console → Auth → Security → Memberships privacy, turn on <b>User ID</b> and <b>Name</b>.</span></div>}
+      {expenses.length > 0 && members.every(m => !(nets[m.user_id] || 0)) && <SettledBanner settlements={settlements} members={members} cur={cur} archived={archived} onToggle={toggleArchive} />}
       <MyBalance net={nets[user.id] || 0} cur={cur} />
 
       <div className="eyebrow">Balances</div>
@@ -766,7 +783,7 @@ function GroupView({ groupId, user, onBack }) {
       </div>
 
       {tab === 'expenses' && <ExpenseList members={members} expenses={expenses} splits={splits} cur={cur} me={user.id} onOpen={e => setSheet({ detail: e })} />}
-      {tab === 'activity' && <GroupActivityTab activity={activity} expenses={expenses} cur={cur} members={members} />}
+      {tab === 'activity' && <GroupActivityTab activity={activity} expenses={expenses} settlements={settlements} cur={cur} members={members} />}
       {tab === 'chat' && <Chat group={group} user={user} members={members} />}
 
       {tab === 'expenses' && (
@@ -1559,10 +1576,38 @@ function RecapCard({ items, groups, cur, overall, onSee }) {
   )
 }
 
-function GroupActivityTab({ activity, expenses, cur, members }) {
+// Everyone is at $0: celebrate, show the last payment, offer to archive (personal) the group.
+function SettledBanner({ settlements, members, cur, archived, onToggle }) {
+  const last = settlements[0] // newest first
+  return (
+    <div className="settled" role="status">
+      <div className="settled-t">All settled 🎉</div>
+      <p>{last ? <>Last payment: <b>{nameOf(members, last.from_member)}</b> paid <b>{nameOf(members, last.to_member)}</b> <span className="num">{money(last.amount_cents, cur)}</span> on {fmtDate(String(last.created_at).slice(0, 10))}.</> : 'Everyone is even.'}</p>
+      <div className="settled-actions">
+        <button className="btn sm" onClick={onToggle}>{archived ? 'Unarchive' : 'Archive group'}</button>
+        <span className="tiny muted">{archived ? 'Archived on your Home. ' : ''}Only your Home is tidied; it comes back if anything new is owed.</span>
+      </div>
+    </div>
+  )
+}
+
+function GroupActivityTab({ activity, expenses, settlements = [], cur, members }) {
   return (
     <>
       <Charts expenses={expenses} cur={cur} members={members} />
+      {settlements.length > 0 && <>
+        <div className="eyebrow mt">Payments</div>
+        <div className="card list" aria-label="Settle-up history">
+          {settlements.map(s => (
+            <div className="row" key={s.id}>
+              <Avatar members={members} id={s.from_member} />
+              <div className="grow"><b>{nameOf(members, s.from_member)}</b> <span className="muted">paid</span> <b>{nameOf(members, s.to_member)}</b>
+                <div className="tiny faint">{fmtDate(String(s.created_at).slice(0, 10))}</div></div>
+              <div className="num pos">{money(s.amount_cents, cur)}</div>
+            </div>
+          ))}
+        </div>
+      </>}
       <div className="eyebrow mt">Recent activity</div>
       {activity.length === 0
         ? <div className="empty">Activity appears here as people add expenses and settle up.</div>

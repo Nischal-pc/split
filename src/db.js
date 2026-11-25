@@ -410,7 +410,17 @@ async function _listMySpending(userId) {
   ])
   return myShares(userId, ex.documents.map(norm), sp.documents)
 }
+// Archived groups are personal (they tidy only your Home) and live in your account prefs, so they follow you across devices.
+async function _getArchived() { return (await account.getPrefs()).archived || [] }
+export async function setArchived(groupId, on) {
+  const prefs = await account.getPrefs()
+  const list = new Set(prefs.archived || [])
+  if (on) list.add(groupId); else list.delete(groupId)
+  await account.updatePrefs({ ...prefs, archived: [...list] })
+  try { localStorage.setItem(OFF + 'archived', JSON.stringify([...list])) } catch { /* ignore */ }
+}
 // Cached readers (fall back to the last saved copy when offline).
+export const getArchived = (...a) => cached('archived', () => _getArchived(...a))
 export const listMySpending = (...a) => cached('spend', () => _listMySpending(...a))
 export const listGroups = (...a) => cached('groups', () => _listGroups(...a))
 export const listPeople = (...a) => cached('people', () => _listPeople(...a))
