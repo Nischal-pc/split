@@ -430,7 +430,18 @@ export async function setArchived(groupId, on) {
   await account.updatePrefs({ ...prefs, archived: [...list] })
   try { localStorage.setItem(OFF + 'archived', JSON.stringify([...list])) } catch { /* ignore */ }
 }
+// Monthly budget per currency, in your account prefs: { '$': 80000 }. 0 / missing = no budget.
+async function _getBudgets() { return (await account.getPrefs()).budgets || {} }
+export async function setBudget(cur, cents) {
+  const prefs = await account.getPrefs()
+  const budgets = { ...(prefs.budgets || {}) }
+  if (cents > 0) budgets[cur] = cents; else delete budgets[cur]
+  await account.updatePrefs({ ...prefs, budgets })
+  try { localStorage.setItem(OFF + 'budgets', JSON.stringify(budgets)) } catch { /* ignore */ }
+  return budgets
+}
 // Cached readers (fall back to the last saved copy when offline).
+export const getBudgets = (...a) => cached('budgets', () => _getBudgets(...a))
 export const getArchived = (...a) => cached('archived', () => _getArchived(...a))
 export const listMySpending = (...a) => cached('spend', () => _listMySpending(...a))
 export const listGroups = (...a) => cached('groups', () => _listGroups(...a))

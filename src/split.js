@@ -197,3 +197,15 @@ export function shiftMonth(ym, n) {
 }
 export const inMonth = (items, ym) => items.filter(i => monthOf(i.spent_on) === ym)
 export const sumCents = items => items.reduce((s, i) => s + i.amount_cents, 0)
+
+// Monthly budget status. spent/budget in cents; ym 'YYYY-MM'; today 'YYYY-MM-DD'.
+// pace compares spending with the share of the month that has passed (only for the current month).
+export function budgetStatus(spent, budget, ym, today) {
+  const [y, m] = ym.split('-').map(Number)
+  const days = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  const current = today.slice(0, 7) === ym
+  const day = current ? +today.slice(8, 10) : days
+  const expected = Math.round(budget * day / days)
+  const pace = spent > budget ? 'over' : current && spent > expected * 1.1 ? 'ahead' : 'ok'
+  return { pct: budget ? spent / budget : 0, left: budget - spent, daysLeft: current ? days - day : 0, expected, pace }
+}

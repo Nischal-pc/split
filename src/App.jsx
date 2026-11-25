@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
 import * as db from './db.js'
-import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents, monthOf, shiftMonth, inMonth, sumCents } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents, monthOf, shiftMonth, inMonth, sumCents, budgetStatus } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -394,6 +394,7 @@ function HomeTab({ user, onOpen, onAccount }) {
   const [groups, setGroups] = useState(null)
   const [spend, setSpend] = useState([]) // your share of each expense
   const [archived, setArchivedIds] = useState([])
+  const [budgets, setBudgets] = useState({})
   const [month, setMonth] = useState(() => sessionStorage.getItem('splitit.recap') || monthOf(todayISO()))
   const [people, setPeople] = useState(null)
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
@@ -402,6 +403,7 @@ function HomeTab({ user, onOpen, onAccount }) {
     try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) }
     try { setSpend(await db.listMySpending(user.id)) } catch { setSpend([]) }
     try { setArchivedIds(await db.getArchived()) } catch { setArchivedIds([]) }
+    try { setBudgets(await db.getBudgets()) } catch { setBudgets({}) }
     try { setPeople(await db.listPeople(user.id)) } catch { setPeople([]) }
   }
   useEffect(() => {
@@ -497,7 +499,8 @@ function HomeTab({ user, onOpen, onAccount }) {
 
       {spendCur && spend.length > 0 && <>
         <RecapCard items={spendItems} groups={gs} cur={spendCur} overall={oneCur ? overall : 0} onSee={ym => { setMonth(ym); document.getElementById('spending')?.scrollIntoView({ behavior: 'smooth' }) }} />
-        <MonthSpending items={spendItems} groups={gs} cur={spendCur} month={month} setMonth={setMonth} otherCurrencies={currencies.length > 1} />
+        <MonthSpending items={spendItems} groups={gs} cur={spendCur} month={month} setMonth={setMonth} otherCurrencies={currencies.length > 1}
+          budget={budgets[spendCur] || 0} onBudget={async c => setBudgets(await db.setBudget(spendCur, c))} />
       </>}
 
       {groups === null ? <><div className="eyebrow mt">Your groups</div><div className="muted pad">Loading…</div></>
@@ -1559,7 +1562,7 @@ function Charts({ expenses, cur, members, stats = true }) {
 const monthName = (ym, year) => new Date(ym + '-01T00:00').toLocaleDateString(undefined, year ? { month: 'long', year: 'numeric' } : { month: 'long' })
 
 // Home: your share of spending for one month, with ‹ › to move between months.
-function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies }) {
+function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies, budget, onBudget }) {
   const now = monthOf(todayISO())
   const first = items.reduce((m, i) => (monthOf(i.spent_on) < m ? monthOf(i.spent_on) : m), now)
   const these = inMonth(items, month), total = sumCents(these)
@@ -1580,6 +1583,7 @@ function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies })
         {total === 0 ? 'Nothing in this month.' : `Your share of ${these.length} expense${these.length === 1 ? '' : 's'} · settle-ups don’t count`}
         {delta !== null && <span className={delta > 0 ? 'neg' : 'pos'}> · {delta > 0 ? '▲' : '▼'} {Math.abs(delta)}% vs {monthName(prevYm)}</span>}
       </p>
+      <BudgetBar spent={total} budget={budget} cur={cur} month={month} onSave={onBudget} />
       {otherCurrencies && <p className="tiny faint">Showing {cur} groups only.</p>}
       {these.length > 0 && <Charts expenses={these} cur={cur} stats={false} />}
       {byGroup.length > 1 && <>
@@ -1595,6 +1599,49 @@ function MonthSpending({ items, groups, cur, month, setMonth, otherCurrencies })
         </div>
       </>}
     </section>
+  )
+}
+
+// Monthly budget: progress, pace for the current month, and an inline editor.
+function BudgetBar({ spent, budget, cur, month, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState('')
+  const [busy, setBusy] = useState(false)
+  const open = () => { setVal(budget ? (budget / 100).toFixed(0) : ''); setEditing(true) }
+  async function save(cents) {
+    setBusy(true)
+    try { await onSave(cents); setEditing(false) } catch { /* keep the editor open */ } finally { setBusy(false) }
+  }
+  if (editing) return (
+    <form className="budget-edit" onSubmit={e => { e.preventDefault(); save(toCents(val)) }}>
+      <label className="fld"><span>Monthly budget ({cur}) — your share of spending</span>
+        <div className="budget-row">
+          <input className="inp num" inputMode="decimal" autoFocus value={val} onChange={e => setVal(e.target.value)} placeholder="800" />
+          <button className="btn" disabled={busy}>{busy ? '…' : 'Save'}</button>
+        </div></label>
+      <div className="budget-links">
+        <button type="button" className="linkbtn" onClick={() => setEditing(false)}>Cancel</button>
+        {budget > 0 && <button type="button" className="linkbtn danger-text" onClick={() => save(0)}>Remove budget</button>}
+      </div>
+    </form>
+  )
+  if (!budget) return <button className="linkbtn budget-set" onClick={open}>+ Set a monthly budget</button>
+  const st = budgetStatus(spent, budget, month, todayISO())
+  const label = st.pace === 'over' ? `Over budget by ${money(-st.left, cur)}`
+    : st.pace === 'ahead' ? `Spending faster than planned · ${money(st.left, cur)} left`
+    : `${money(st.left, cur)} left${st.daysLeft ? ` · ${st.daysLeft} day${st.daysLeft === 1 ? '' : 's'} to go` : ''}`
+  return (
+    <div className={'budget ' + st.pace}>
+      <div className="budget-top">
+        <span><b className="num">{money(spent, cur)}</b> of <span className="num">{money(budget, cur)}</span></span>
+        <button className="linkbtn" onClick={open} aria-label="Edit monthly budget">Edit</button>
+      </div>
+      <div className="budget-track" role="progressbar" aria-valuemin={0} aria-valuemax={budget} aria-valuenow={spent} aria-label="Budget used">
+        <span style={{ transform: `scaleX(${Math.min(1, st.pct)})` }} />
+        {st.daysLeft > 0 && <i style={{ left: `${Math.min(100, st.expected / budget * 100)}%` }} title="Where you'd be if you spent evenly" />}
+      </div>
+      <div className="budget-note">{label}</div>
+    </div>
   )
 }
 

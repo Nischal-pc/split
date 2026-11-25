@@ -1,6 +1,6 @@
 // Run with: npm test  (plain Node, no test framework)
 import assert from 'node:assert'
-import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents, myShares, shiftMonth, inMonth, sumCents } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents, myShares, shiftMonth, inMonth, sumCents, budgetStatus } from './split.js'
 
 // equal split of 10.00 among 3 -> 3.34/3.33/3.33, remainder to payer
 let a = allocate(1000, [{ id: 'x', w: 1 }, { id: 'y', w: 1 }, { id: 'z', w: 1 }], 'x')
@@ -92,4 +92,12 @@ assert.equal(sumCents(inMonth(mine, '2026-11')), 4000) // half the $80 groceries
 assert.equal(sumCents(inMonth(mine, '2026-10')), 90000)
 assert.equal(shiftMonth('2026-01', -1), '2025-12'); assert.equal(shiftMonth('2026-12', 1), '2027-01')
 
-console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency/spending checks passed')
+// budget: $800 in a 30-day month
+let b = budgetStatus(40000, 80000, '2026-11', '2026-11-15') // half the money, half the month
+assert.deepEqual([b.pace, b.left, b.daysLeft, b.expected], ['ok', 40000, 15, 40000])
+assert.equal(budgetStatus(60000, 80000, '2026-11', '2026-11-10').pace, 'ahead') // 75% spent a third of the way in
+assert.equal(budgetStatus(90000, 80000, '2026-11', '2026-11-29').pace, 'over')
+assert.equal(budgetStatus(70000, 80000, '2026-10', '2026-11-15').pace, 'ok') // past month: no pace, just under budget
+assert.equal(budgetStatus(10000, 80000, '2026-02', '2026-02-28').daysLeft, 0)
+
+console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency/spending/budget checks passed')
