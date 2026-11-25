@@ -40,6 +40,7 @@ const Ic = {
   user: () => <Svg><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></Svg>,
   share: () => <Svg width="17" height="17"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" /><path d="M16 6l-4-4-4 4M12 2v13" /></Svg>,
   bell: () => <Svg><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Svg>,
+  bank: () => <Svg><path d="M3 10h18M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18M12 3l9 5H3z" /></Svg>,
   plus: () => <Svg><path d="M12 5v14M5 12h14" /></Svg>,
   userPlus: () => <Svg><circle cx="10" cy="8" r="4" /><path d="M2 21c0-4 4-6 8-6s8 2 8 6M19 4v6M16 7h6" /></Svg>,
   ticket: () => <Svg><path d="M3 9a3 3 0 0 0 0 6v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a3 3 0 0 1 0-6V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z" /><path d="M14 5v14" strokeDasharray="2 2" /></Svg>,
@@ -192,6 +193,32 @@ function GlobalActivity({ user }) {
   )
 }
 
+// Canadian banks for "Pay with my bank". There is no public Interac deep link with a pre-filled amount,
+// so we copy the recipient's email and open the bank's site (phones hand off to the bank app if installed).
+const BANKS = [
+  ['rbc', 'RBC Royal Bank', 'https://www.rbcroyalbank.com'], ['td', 'TD', 'https://www.td.com'],
+  ['scotia', 'Scotiabank', 'https://www.scotiabank.com/ca/en/personal.html'], ['bmo', 'BMO', 'https://www.bmo.com'],
+  ['cibc', 'CIBC', 'https://www.cibc.com'], ['nbc', 'National Bank', 'https://www.nbc.ca'], ['desjardins', 'Desjardins', 'https://www.desjardins.com'],
+  ['tangerine', 'Tangerine', 'https://www.tangerine.ca'], ['simplii', 'Simplii', 'https://www.simplii.com'], ['eq', 'EQ Bank', 'https://www.eqbank.ca'],
+  ['wealthsimple', 'Wealthsimple', 'https://www.wealthsimple.com'], ['koho', 'KOHO', 'https://www.koho.ca'], ['atb', 'ATB', 'https://www.atb.com'],
+  ['pc', 'PC Financial', 'https://www.pcfinancial.ca'], ['laurentian', 'Laurentian Bank', 'https://www.laurentianbank.ca'],
+]
+const myBank = () => BANKS.find(b => b[0] === localStorage.getItem('splitit.bank'))
+// Account: pick the bank this device pays from.
+function BankRow() {
+  const [bank, setBank] = useState(localStorage.getItem('splitit.bank') || '')
+  const pick = v => { setBank(v); if (v) localStorage.setItem('splitit.bank', v); else localStorage.removeItem('splitit.bank') }
+  return (
+    <label className="row">
+      <Ic.bank />
+      <div className="grow">My bank<div className="tiny muted">Used by “Pay with my bank” in Settle up</div></div>
+      <select className="chipsel" value={bank} onChange={e => pick(e.target.value)} aria-label="My bank">
+        <option value="">Choose…</option>
+        {BANKS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
+    </label>
+  )
+}
+
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent)
 const PUSH_HINT = {
   unsupported: () => isIOS() ? 'On iPhone: tap Share → Add to Home Screen, then open SplitIt from your Home Screen' : 'This browser can’t show notifications',
@@ -254,6 +281,7 @@ function AccountTab({ user, onSignOut }) {
       </div>
       <div className="card list">
         <PushRow user={user} />
+        <BankRow />
         <button className="row rowbtn" onClick={toggleTheme}><Ic.moon /><div className="grow">Toggle light / dark</div><div className="chev"><Ic.chev /></div></button>
         <button className="row rowbtn" onClick={onSignOut}><Ic.logout /><div className="grow">Sign out</div><div className="chev"><Ic.chev /></div></button>
       </div>
@@ -1244,9 +1272,17 @@ function SettleUp({ group, members, user, pre, onClose }) {
   const [copied, setCopied] = useState('')
   const cur = group.currency
   const a = toCents(amount)
-  const toM = members.find(m => m.user_id === to), fromName = nameOf(members, from), toName = nameOf(members, to)
+  const toM = members.find(m => m.user_id === to), fromM = members.find(m => m.user_id === from), fromName = nameOf(members, from), toName = nameOf(members, to)
   const copy = async (k, v) => { try { await navigator.clipboard.writeText(v); setCopied(k); setTimeout(() => setCopied(''), 1500) } catch { /* ignore */ } }
-  const ask = () => db.shareText('SplitIt', `Hi ${fromName}, you owe me ${money(a, cur)} for “${group.name}” on SplitIt. You can send it by e-Transfer to ${user.email}. Thanks!`).catch(() => {})
+  const ask = () => db.shareText('SplitIt', `Hi ${fromName}, you owe me ${money(a, cur)} for “${group.name}” on SplitIt. You can send it by Interac e-Transfer to ${user.email}. Thanks!`).catch(() => {})
+  const [bank, setBank] = useState(myBank)
+  const memo = `SplitIt · ${group.name}`
+  // Copy the recipient's email (the fiddly part to type), then open the bank. The amount stays big on screen.
+  async function payWithBank(b) {
+    if (toM?.email) await copy('email', toM.email)
+    window.open(b[2], '_blank', 'noopener')
+  }
+  const chooseBank = id => { const b = BANKS.find(x => x[0] === id); if (!b) return; localStorage.setItem('splitit.bank', id); setBank(b) }
 
   async function record() {
     if (a <= 0) return setErr('Enter an amount')
@@ -1270,14 +1306,29 @@ function SettleUp({ group, members, user, pre, onClose }) {
       <label className="fld"><span>Amount ({cur})</span><input className="inp" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></label>
       {from === user.id && to !== user.id && a > 0 && <div className="payhelp">
         <div className="payhelp-t">Pay {toName} by Interac e-Transfer</div>
-        {toM?.email && <div className="payrow"><span className="muted">Send to</span><b className="truncate">{toM.email}</b>
-          <button type="button" className="btn ghost sm" onClick={() => copy('email', toM.email)}>{copied === 'email' ? 'Copied ✓' : 'Copy'}</button></div>}
-        <div className="payrow"><span className="muted">Amount</span><b className="num">{money(a, cur)}</b>
-          <button type="button" className="btn ghost sm" onClick={() => copy('amt', (a / 100).toFixed(2))}>{copied === 'amt' ? 'Copied ✓' : 'Copy'}</button></div>
-        <p className="split-hint" style={{ margin: '8px 0 0' }}>Send it from your banking app, then tap Record payment.</p>
+        <div className="payamt num">{money(a, cur)}</div>
+        {toM?.email
+          ? <div className="payrow"><span className="muted">Send to</span><b className="truncate">{toM.email}</b>
+            <button type="button" className="btn ghost sm" onClick={() => copy('email', toM.email)}>{copied === 'email' ? 'Copied ✓' : 'Copy'}</button></div>
+          : <p className="split-hint">{toName} has no email on SplitIt — ask them which email to send to.</p>}
+        <div className="payrow"><span className="muted">Message</span><span className="truncate">{memo}</span>
+          <button type="button" className="btn ghost sm" onClick={() => copy('memo', memo)}>{copied === 'memo' ? 'Copied ✓' : 'Copy'}</button></div>
+        {bank
+          ? <button type="button" className="btn block withicon paybtn" onClick={() => payWithBank(bank)}><Ic.bank />{toM?.email ? 'Copy email & open ' : 'Open '}{bank[1]}</button>
+          : <label className="fld paypick"><span>Your bank (remembered on this phone)</span>
+            <select className="inp" defaultValue="" onChange={e => chooseBank(e.target.value)}>
+              <option value="" disabled>Choose your bank…</option>
+              {BANKS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>}
+        <p className="split-hint" style={{ margin: '10px 0 0' }}>
+          In your bank: <b>Send money → Interac e-Transfer</b>, paste the email, enter <b>{money(a, cur)}</b>. If {toName} has Autodeposit on, there’s no security question and it arrives right away. Then come back and tap <b>Record payment</b>.
+          {bank && <> <button type="button" className="linkbtn" onClick={() => { localStorage.removeItem('splitit.bank'); setBank(null) }}>Change bank</button></>}</p>
       </div>}
-      {to === user.id && from !== user.id && a > 0 &&
-        <button type="button" className="btn ghost block withicon" style={{ marginBottom: 16 }} onClick={ask}><Ic.share />Ask {fromName} to pay {money(a, cur)}</button>}
+      {to === user.id && from !== user.id && a > 0 && <div className="payhelp">
+        <div className="payhelp-t">Get paid by {fromName}</div>
+        <button type="button" className="btn ghost block withicon" onClick={ask}><Ic.share />Ask {fromName} to pay {money(a, cur)}</button>
+        <p className="split-hint" style={{ margin: '10px 0 0' }}>
+          Fastest: in <b>your</b> bank app use <b>Interac → Request money</b>{fromM?.email ? <> to <b>{fromM.email}</b></> : ''} for <b>{money(a, cur)}</b>. {fromName} gets a link that opens their bank with the amount already filled in.</p>
+      </div>}
       <label className="fld"><span>Note (optional)</span><input className="inp" maxLength={200} value={note} onChange={e => setNote(e.target.value)} placeholder="e-Transfer, cash…" /></label>
       {err && <div className="err"><Ic.alert />{err}</div>}
       <button className="btn block" onClick={record}>Record payment</button>
