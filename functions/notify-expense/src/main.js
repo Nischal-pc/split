@@ -4,7 +4,7 @@
 // 2) Called by a signed-in user with { action: 'remind', groupId, toUserId, amount }: nudge one person to pay.
 // 3) Scheduled on the 1st of each month: "Your October recap" to everyone with notifications on.
 // Variables: APPWRITE_API_KEY, APP_DB_ID, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT.
-import { Client, Databases, Teams, Query } from 'node-appwrite'
+import { Client, Databases, Teams, Users, Query } from 'node-appwrite'
 import webpush from 'web-push'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -138,7 +138,11 @@ export default async ({ req, res, log, error }) => {
       else if (other === 'comments') {
         const exp = await databases.getDocument(DB, 'expenses', body.expense_id).catch(() => null)
         text = `${body.display_name} commented${exp ? ` on “${exp.description}”` : ''}: ${clip(body.body)}`
-      } else text = `${body.userName || 'Someone'} ${other === 'create' ? 'joined' : 'left'} the group`
+      } else {
+        // Appwrite sends no name with a deleted membership, so look the person up
+        const who = body.userName || (await new Users(client).get(body.userId).catch(() => ({}))).name || 'Someone'
+        text = `${who} ${other === 'create' ? 'joined' : 'left'} the group`
+      }
       const r = await pushTo(mems.map(m => m.userId).filter(id => id && id !== actorId), () => ({
         title: `SplitIt · ${group.name}`, body: text, url: `/?group=${group.$id}`,
         tag: other === 'messages' ? `chat-${group.$id}` : body.$id,
