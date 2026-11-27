@@ -434,16 +434,27 @@ async function subDocId(endpoint) {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint)))
   return 'p' + [...h].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 35)
 }
-export async function enablePush(userId) {
-  if (await Notification.requestPermission() !== 'granted') return 'denied'
-  const reg = await navigator.serviceWorker.register('/sw.js')
-  await navigator.serviceWorker.ready
-  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC_KEY) })
+async function saveSub(userId, sub) {
   const j = sub.toJSON(), id = await subDocId(j.endpoint)
   const data = { user_id: userId, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }
   const mine = [Permission.read(Role.user(userId)), Permission.update(Role.user(userId)), Permission.delete(Role.user(userId))]
   try { await databases.createDocument(DB, C.push, id, data, mine) }
   catch (e) { if (e.code === 409) await databases.updateDocument(DB, C.push, id, data); else throw e }
+}
+// Re-save on app start: the browser can say "subscribed" while the server has no row for this person.
+export async function syncPush(userId) {
+  if (await pushState() !== 'on') return
+  const sub = await (await navigator.serviceWorker.getRegistration()).pushManager.getSubscription()
+  try { await saveSub(userId, sub) }
+  catch (e) { if (e.code === 401 || e.code === 404) await sub.unsubscribe() } // row belongs to another account: ask again
+}
+export async function enablePush(userId) {
+  if (await Notification.requestPermission() !== 'granted') return 'denied'
+  const reg = await navigator.serviceWorker.register('/sw.js')
+  await navigator.serviceWorker.ready
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC_KEY) })
+  try { await saveSub(userId, sub) }
+  catch (e) { await sub.unsubscribe(); throw e } // never show "On" when nothing was registered
   return 'on'
 }
 export async function disablePush() {

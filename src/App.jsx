@@ -132,6 +132,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return
     db.flushOutbox()
+    db.syncPush(user.id).catch(() => {})
     window.addEventListener('online', db.flushOutbox)
     return () => window.removeEventListener('online', db.flushOutbox)
   }, [user])
@@ -329,7 +330,7 @@ const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent)
 const PUSH_HINT = {
   unsupported: () => isIOS() ? 'On iPhone: tap Share → Add to Home Screen, then open SplitIt from your Home Screen' : 'This browser can’t show notifications',
   denied: () => 'Blocked. Allow notifications for SplitIt in your phone’s Settings',
-  off: () => 'Get notified when someone adds or edits an expense',
+  off: () => 'Get notified when anything changes in your groups',
   on: () => 'On for this device',
 }
 // Notifications switch (Account tab).
@@ -353,19 +354,24 @@ function PushRow({ user }) {
     </div>
   )
 }
-// One-time nudge on Home while notifications are off.
+// Nudge on Home while notifications are off; "Not now" snoozes it for a week.
+// iPhone Safari can't subscribe until the app is on the Home Screen, so it gets those steps instead.
 function PushNudge({ user }) {
   const [st, setSt] = useState(null)
   const [busy, setBusy] = useState(false)
-  useEffect(() => { if (!localStorage.getItem('splitit.pushNudge')) db.pushState().then(setSt).catch(() => {}) }, [])
-  const hide = () => { localStorage.setItem('splitit.pushNudge', '1'); setSt(null) }
-  if (st !== 'off') return null
+  useEffect(() => {
+    if (Date.now() - (+localStorage.getItem('splitit.pushNudge') || 0) < 7 * 86400000) return
+    db.pushState().then(setSt).catch(() => {})
+  }, [])
+  const hide = () => { localStorage.setItem('splitit.pushNudge', String(Date.now())); setSt(null) }
+  const needsInstall = st === 'unsupported' && isIOS()
+  if (st !== 'off' && !needsInstall) return null
   return (
     <div className="nudge">
       <Ic.bell />
-      <div className="grow"><b>Know when friends add expenses</b><div className="tiny muted">Get a notification when someone in your groups adds or edits one.</div></div>
+      <div className="grow"><b>Know when friends add expenses</b><div className="tiny muted">{needsInstall ? PUSH_HINT.unsupported() + ', and turn on notifications.' : 'Get a notification when someone in your groups adds or edits one.'}</div></div>
       <div className="nudge-actions">
-        <button className="btn sm" disabled={busy} onClick={async () => { setBusy(true); try { if (await db.enablePush(user.id) === 'on') hide() } catch { /* ignore */ } setBusy(false) }}>Turn on</button>
+        {!needsInstall && <button className="btn sm" disabled={busy} onClick={async () => { setBusy(true); try { if (await db.enablePush(user.id) === 'on') hide() } catch { /* ignore */ } setBusy(false) }}>Turn on</button>}
         <button className="linkbtn" onClick={hide}>Not now</button>
       </div>
     </div>
@@ -922,6 +928,7 @@ function GroupView({ groupId, user, onBack }) {
       {members.some(m => !m.user_id) && <div className="err" role="alert"><Ic.alert />
         <span>Other members are hidden by Appwrite, so balances here can’t be worked out. In Appwrite Console → Auth → Security → Memberships privacy, turn on <b>User ID</b> and <b>Name</b>.</span></div>}
       {expenses.length > 0 && members.every(m => !(nets[m.user_id] || 0)) && <SettledBanner settlements={settlements} members={members} cur={cur} archived={archived} onToggle={toggleArchive} />}
+      <PushNudge user={user} />
       <MyBalance net={nets[user.id] || 0} cur={cur} />
 
       <div className="eyebrow">Balances</div>
