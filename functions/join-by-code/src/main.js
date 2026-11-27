@@ -1,6 +1,24 @@
 // Appwrite Function: add the signed-in caller to a group's team, given its join code.
 // Runs with a server API key (set as the APPWRITE_API_KEY function variable).
+import { createHash } from 'node:crypto'
 import { Client, Databases, Teams, Messaging, Query, ID } from 'node-appwrite'
+
+// At most this many wrong codes per account per hour.
+const GUESSES = 10
+
+// Claims one of the hour's attempt slots. Creating a document is atomic, so parallel requests
+// can't share a slot. Returns the slot id, null when all are used, or '' if the table isn't set up.
+async function claimAttempt(databases, DB, userId, error) {
+  const hour = Math.floor(Date.now() / 3600000)
+  for (let i = 0; i < GUESSES; i++) {
+    const id = 'j' + createHash('sha256').update(`${userId}|${hour}|${i}`).digest('hex').slice(0, 35)
+    try { await databases.createDocument(DB, 'join_attempts', id, { user_id: userId }, []); return id }
+    catch (e) {
+      if (e.code !== 409) { error('rate limit unavailable (run npm run setup): ' + e.message); return '' }
+    }
+  }
+  return null
+}
 
 export default async ({ req, res, log, error }) => {
   const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || process.env.APPWRITE_ENDPOINT
@@ -70,10 +88,14 @@ export default async ({ req, res, log, error }) => {
   const name = String(body.name || 'Member').slice(0, 128)
   if (!code) return res.json({ ok: false, error: 'Enter a code' }, 400)
 
+  const slot = await claimAttempt(databases, DB, userId, error)
+  if (slot === null) return res.json({ ok: false, error: 'Too many wrong codes. Try again in an hour.' }, 429)
+
   try {
     const found = await databases.listDocuments(DB, 'groups', [Query.equal('join_code', code), Query.limit(1)])
     if (!found.total) return res.json({ ok: false, error: 'No group with that code' }, 404)
     const group = found.documents[0]
+    if (slot) await databases.deleteDocument(DB, 'join_attempts', slot).catch(() => {}) // right code: doesn't count
 
     // already a member? then just return the group
     const mems = await teams.listMemberships(group.team_id, [Query.equal('userId', userId), Query.limit(1)])

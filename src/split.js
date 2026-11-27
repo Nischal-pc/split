@@ -52,8 +52,15 @@ export function splitsFromDraft({ amount, type, picks, vals, payer }) {
   return allocate(amount, picks.map(id => ({ id, w: weight(id) })), payer)
 }
 
-export const toCents = v => Math.round(parseFloat(v || 0) * 100) || 0
-export const money = (c, cur = '$') => (c < 0 ? '-' : '') + cur + (Math.abs(c) / 100).toFixed(2)
+// Accepts "12.50", "12,50", "1,234.50" and "1.234,50": a comma followed by 1-2 digits is a decimal point.
+export const toCents = v => {
+  let s = String(v ?? '').replace(/[^\d.,-]/g, '')
+  s = /,\d{1,2}$/.test(s) ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '')
+  return Math.round(parseFloat(s) * 100) || 0
+}
+export const money = (c, cur = '$') => (c < 0 ? '-' : '') + cur + (Math.abs(c) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// The calendar day where the person is. toISOString() is UTC, which is already "tomorrow" on a Canadian evening.
+export const localDay = (d = new Date()) => { const x = new Date(d); return [x.getFullYear(), x.getMonth() + 1, x.getDate()].map(n => String(n).padStart(2, '0')).join('-') }
 
 // Parse OCR'd receipt text into {amount (cents), merchant}. Best-effort heuristic.
 export function parseReceipt(text) {

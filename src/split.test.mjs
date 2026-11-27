@@ -1,6 +1,6 @@
 // Run with: npm test  (plain Node, no test framework)
 import assert from 'node:assert'
-import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents, myShares, shiftMonth, inMonth, sumCents, budgetStatus, monthInsights, daysBetween } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, parseReceipt, nextDate, dueDates, filterExpenses, peopleBalances, itemSplit, parseReceiptItems, guessCode, convertCents, myShares, shiftMonth, inMonth, sumCents, budgetStatus, monthInsights, daysBetween, toCents, money, localDay } from './split.js'
 
 // equal split of 10.00 among 3 -> 3.34/3.33/3.33, remainder to payer
 let a = allocate(1000, [{ id: 'x', w: 1 }, { id: 'y', w: 1 }, { id: 'z', w: 1 }], 'x')
@@ -124,5 +124,11 @@ const sinceG = { id: 'g', team_id: 't', name: 'G', currency: '$', members: M('me
   splits: [{ expense_id: 'x', member_id: 'sam', owed_cents: 2000 }, { expense_id: 'y', member_id: 'sam', owed_cents: 4000 }],
   settlements: [{ from_member: 'sam', to_member: 'me', amount_cents: 2000, $createdAt: '2026-09-20T10:00:00Z' }] }
 assert.equal(peopleBalances('me', [sinceG])[0].since, '2026-10-03') // the Sept one was paid back
+
+// typed amounts: either decimal mark, with or without thousands separators
+for (const [typed, cents] of [['12.50', 1250], ['12,50', 1250], ['1,234.50', 123450], ['1.234,50', 123450], ['1,234', 123400], ['$ 8', 800], ['', 0], ['abc', 0]]) assert.equal(toCents(typed), cents, typed)
+assert.equal(money(123456789), '$1,234,567.89')
+assert.equal(money(-5), '-$0.05')
+assert.equal(localDay(new Date(2026, 0, 31, 23, 59)), '2026-01-31') // late evening stays on the same day
 
 console.log('ok — all split/balance/receipt/recurring/filter/people/item/currency/spending/budget/insight checks passed')

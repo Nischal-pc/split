@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid } from 'recharts'
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import * as db from './db.js'
-import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents, monthOf, shiftMonth, inMonth, sumCents, budgetStatus, monthInsights, daysBetween } from './split.js'
+import { allocate, computeNets, simplify, splitsFromDraft, toCents, money, parseReceipt, parseReceiptItems, itemSplit, nextDate, filterExpenses, CURRENCIES, guessCode, convertCents, monthOf, shiftMonth, inMonth, sumCents, budgetStatus, monthInsights, daysBetween, localDay } from './split.js'
 
 const GoogleG = () => (
   <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -12,15 +11,15 @@ const GoogleG = () => (
   </svg>
 )
 
-const CATS = { general: '🧾', food: '🍽️', transport: '🚕', home: '🏠', trip: '✈️', fun: '🎉', shopping: '🛍️' }
-const COLORS = ['#2f7d4f', '#c0492f', '#2b6fb0', '#9a5bbf', '#b8791f', '#1f998f', '#c0497f', '#5a6b2f']
-const nameOf = (members, id) => members.find(m => m.user_id === id)?.display_name || '?'
+export const CATS = { general: '🧾', food: '🍽️', transport: '🚕', home: '🏠', trip: '✈️', fun: '🎉', shopping: '🛍️' }
+export const COLORS = ['#2f7d4f', '#c0492f', '#2b6fb0', '#9a5bbf', '#b8791f', '#1f998f', '#c0497f', '#5a6b2f']
+export const nameOf = (members, id) => members.find(m => m.user_id === id)?.display_name || '?'
 const colorOf = (members, id) => COLORS[Math.max(0, members.findIndex(m => m.user_id === id)) % COLORS.length]
 const displayName = user => user.name || user.email
 
 /* drawn icons (one consistent 1.9 stroke) */
 const Svg = p => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" {...p} />
-const Ic = {
+export const Ic = {
   moon: () => <Svg><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></Svg>,
   logout: () => <Svg><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></Svg>,
   back: () => <Svg width="18" height="18"><path d="M15 18l-6-6 6-6" /></Svg>,
@@ -75,13 +74,33 @@ function greeting(h = new Date().getHours()) {
   if (h >= 17 && h < 21) return { text: 'Good evening', emoji: '🌆' }
   return { text: 'Good night', emoji: '🌙' }
 }
-const todayISO = () => new Date().toISOString().slice(0, 10)
-const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
+const todayISO = () => localDay()
+export const fmtDate = d => d ? new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
+
+// Light / dark: follows the system until the person picks one, then remembers it.
+const isDark = () => { const t = localStorage.getItem('splitit.theme'); return t ? t === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches }
+export function applyTheme() {
+  const t = localStorage.getItem('splitit.theme')
+  if (t) document.documentElement.setAttribute('data-theme', t)
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark() ? '#17150f' : '#f5f3ee')
+}
+const Skeleton = ({ rows = 3 }) => <div className="skel" role="status" aria-label="Loading">{Array.from({ length: rows }, (_, i) => <i key={i} />)}</div>
+const LoadError = ({ onRetry }) => <div className="empty" role="alert">Couldn’t load this. Check your connection and try again.<br /><button className="btn sm mt" onClick={onRetry}>Try again</button></div>
 
 export default function App() {
   const wide = useWide()
   const [user, setUser] = useState(undefined)
-  const [groupId, setGroupId] = useState(null)
+  const [groupId, setGroupId] = useState(() => history.state?.group || null)
+  useEffect(() => {
+    const pop = e => setGroupId(e.state?.group || null)
+    window.addEventListener('popstate', pop)
+    return () => window.removeEventListener('popstate', pop)
+  }, [])
+  const openGroup = id => {
+    if (!id) { if (history.state?.group) history.back(); else setGroupId(null); return }
+    history[history.state?.group ? 'replaceState' : 'pushState']({ group: id }, '')
+    setGroupId(id)
+  }
   const [recovery, setRecovery] = useState(null)
 
   async function boot() {
@@ -104,11 +123,11 @@ export default function App() {
   const [joinErr, setJoinErr] = useState('')
   useEffect(() => {
     const open = user && sessionStorage.getItem('splitit.open')
-    if (open) { sessionStorage.removeItem('splitit.open'); setGroupId(open) }
+    if (open) { sessionStorage.removeItem('splitit.open'); openGroup(open) }
     const code = user && sessionStorage.getItem('splitit.join')
     if (!code) return
     sessionStorage.removeItem('splitit.join')
-    db.joinByCode(code, displayName(user)).then(setGroupId).catch(e => setJoinErr(e.message || 'That invite link didn’t work'))
+    db.joinByCode(code, displayName(user)).then(openGroup).catch(e => setJoinErr(e.message || 'That invite link didn’t work'))
   }, [user])
   useEffect(() => {
     if (!user) return
@@ -118,18 +137,18 @@ export default function App() {
   }, [user])
   const onAuthed = async () => { await db.acceptInviteFromUrl().catch(() => {}); setUser(await db.getUser()) }
 
-  const signOut = async () => { await db.signOut(); setGroupId(null); setUser(null) }
+  const signOut = async () => { await db.signOut(); history.replaceState({}, ''); setGroupId(null); setUser(null) }
 
-  if (user === undefined) return <div className="center">Loading…</div>
+  if (user === undefined) return <main className="wrap"><Skeleton rows={4} /></main>
   if (recovery) return <ResetPassword rec={recovery} onDone={() => setRecovery(null)} />
   if (!user) return <Auth onAuthed={onAuthed} />
   if (wide) return <>
-    <Desktop user={user} groupId={groupId} onOpen={setGroupId} onSignOut={signOut} />
+    <Desktop user={user} groupId={groupId} onOpen={openGroup} onSignOut={signOut} />
     {joinErr && <Toast text={joinErr} tone="bad" onDone={() => setJoinErr('')} />}
   </>
-  if (groupId) return <GroupView groupId={groupId} user={user} onBack={() => setGroupId(null)} />
+  if (groupId) return <GroupView groupId={groupId} user={user} onBack={() => openGroup(null)} />
   return <>
-    <Shell user={user} onOpen={setGroupId} onSignOut={signOut} />
+    <Shell user={user} onOpen={openGroup} onSignOut={signOut} />
     {joinErr && <Toast text={joinErr} tone="bad" onDone={() => setJoinErr('')} />}
   </>
 }
@@ -237,7 +256,7 @@ function Shell({ user, onOpen, onSignOut }) {
       {tab === 'account' && <AccountTab user={user} onSignOut={onSignOut} />}
       <nav className="tabbar">
         {[['home', 'Home', Ic.home], ['activity', 'Activity', Ic.pulse], ['account', 'Account', Ic.user]].map(([id, label, Icon]) => (
-          <button key={id} className={'tabitem' + (tab === id ? ' on' : '')} aria-selected={tab === id} onClick={() => setTab(id)}>
+          <button key={id} className={'tabitem' + (tab === id ? ' on' : '')} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}>
             <Icon /><span>{label}</span>
           </button>
         ))}
@@ -249,14 +268,24 @@ function Shell({ user, onOpen, onSignOut }) {
 function GlobalActivity({ user }) {
   const [items, setItems] = useState(null)
   const [names, setNames] = useState({})
-  useEffect(() => { (async () => {
-    const [act, groups] = await Promise.all([db.listRecentActivity(40).catch(() => []), db.listGroups(user.id).catch(() => [])])
-    setNames(Object.fromEntries(groups.map(g => [g.id, g.name]))); setItems(act)
-  })() }, [])
+  const [failed, setFailed] = useState(false)
+  async function load() {
+    setFailed(false)
+    try {
+      const [act, groups] = await Promise.all([db.listRecentActivity(40), db.listGroups(user.id)])
+      setNames(Object.fromEntries(groups.map(g => [g.id, g.name]))); setItems(act)
+    } catch { setFailed(true) }
+  }
+  useEffect(() => {
+    let t
+    load()
+    const unsub = db.subscribeAll(() => { clearTimeout(t); t = setTimeout(load, 600) })
+    return () => { clearTimeout(t); unsub() }
+  }, [])
   return (
     <main className="wrap">
       <div className="home-hero"><div className="greet">Activity</div><div className="sublabel muted">across all your groups</div></div>
-      {items === null ? <div className="muted pad">Loading…</div>
+      {failed ? <LoadError onRetry={load} /> : items === null ? <Skeleton rows={5} />
         : items.length === 0 ? <div className="empty"><div className="big">📋</div>Nothing yet.<br />Add an expense or settle up to see activity here.</div>
           : <div className="card list">
             {items.map(a => (
@@ -344,10 +373,10 @@ function PushNudge({ user }) {
 }
 
 function AccountTab({ user, onSignOut }) {
-  const toggleTheme = () => {
-    const cur = document.documentElement.getAttribute('data-theme')
-    const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches
-    document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark')
+  const toggleTheme = () => { localStorage.setItem('splitit.theme', isDark() ? 'light' : 'dark'); applyTheme() }
+  const signOut = () => {
+    const n = db.pendingFor().length // signing out wipes the outbox
+    if (!n || window.confirm(`${n} expense${n > 1 ? 's haven’t' : ' hasn’t'} uploaded yet and will be lost. Sign out anyway?`)) onSignOut()
   }
   return (
     <main className="wrap">
@@ -360,7 +389,7 @@ function AccountTab({ user, onSignOut }) {
         <PushRow user={user} />
         <BankRow />
         <button className="row rowbtn" onClick={toggleTheme}><Ic.moon /><div className="grow">Toggle light / dark</div><div className="chev"><Ic.chev /></div></button>
-        <button className="row rowbtn" onClick={onSignOut}><Ic.logout /><div className="grow">Sign out</div><div className="chev"><Ic.chev /></div></button>
+        <button className="row rowbtn" onClick={signOut}><Ic.logout /><div className="grow">Sign out</div><div className="chev"><Ic.chev /></div></button>
       </div>
     </main>
   )
@@ -474,17 +503,22 @@ function HomeTab({ user, onOpen, onAccount }) {
   const [people, setPeople] = useState(null)
   const [sheet, setSheet] = useState(null) // 'new' | 'join'
 
-  async function load() {
-    try { setGroups(await db.listGroups(user.id)) } catch { setGroups([]) }
-    try { setSpend(await db.listMySpending(user.id)) } catch { setSpend([]) }
-    try { setArchivedIds(await db.getArchived()) } catch { setArchivedIds([]) }
-    try { setBudgets(await db.getBudgets()) } catch { setBudgets({}) }
-    try { setPeople(await db.listPeople(user.id)) } catch { setPeople([]) }
+  const [failed, setFailed] = useState(false)
+  // Each part fills in as it arrives; a failed refresh keeps what is already on screen.
+  function load() {
+    setFailed(false)
+    db.listGroups(user.id).then(setGroups).catch(() => setFailed(true))
+    db.listMySpending(user.id).then(setSpend).catch(() => {})
+    db.getArchived().then(setArchivedIds).catch(() => {})
+    db.getBudgets().then(setBudgets).catch(() => {})
+    db.listPeople(user.id).then(setPeople).catch(() => {})
   }
   useEffect(() => {
+    let t
     load()
+    const unsub = db.subscribeAll(() => { clearTimeout(t); t = setTimeout(load, 600) })
     window.addEventListener('splitit-synced', load)
-    return () => window.removeEventListener('splitit-synced', load)
+    return () => { clearTimeout(t); unsub(); window.removeEventListener('splitit-synced', load) }
   }, [])
 
   const first = displayName(user).split(/[\s@]/)[0]
@@ -516,7 +550,7 @@ function HomeTab({ user, onOpen, onAccount }) {
           </div>
           <button className="me-btn" onClick={onAccount} aria-label="Your account" title="Your account">{first.slice(0, 1).toUpperCase()}</button>
         </div>
-        {groups === null ? <div className="dash-total muted">Loading…</div>
+        {groups === null ? (failed ? <LoadError onRetry={load} /> : <Skeleton rows={2} />)
           : !gs.length ? <div className="dash-card dash-empty">
             <div className="dash-label">Total balance</div>
             <div className="dash-total num muted">$0.00</div>
@@ -586,7 +620,7 @@ function HomeTab({ user, onOpen, onAccount }) {
       </div>
 
       <div className="home-groups">
-      {groups === null ? <><div className="eyebrow mt">Your groups</div><div className="muted pad">Loading…</div></>
+      {groups === null ? (!failed && <><div className="eyebrow mt">Your groups</div><Skeleton /></>)
         : <>
           {active.some(g => g.kind === 'friend') && <>
             <div className="eyebrow mt">Friends</div>
@@ -712,11 +746,12 @@ function AddFriend({ user, onClose, onDone }) {
   const [cur, setCur] = useState('$')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const made = useRef(null)
   async function add() {
     if (!name.trim()) return setErr('Add your friend’s name')
     setBusy(true); setErr('')
     try {
-      const id = await db.createGroup(`${displayName(user).split('@')[0]} & ${name.trim()}`, cur.trim() || '$', user.id, 'friend')
+      const id = made.current ||= await db.createGroup(`${displayName(user).split('@')[0]} & ${name.trim()}`, cur.trim() || '$', user.id, 'friend')
       if (email.trim()) {
         const g = await db.getGroup(id)
         await db.inviteByEmail(g.team_id, email.trim())
@@ -838,8 +873,11 @@ function GroupView({ groupId, user, onBack }) {
     const [mem, d] = await Promise.all([db.groupMembers(g), db.loadGroupData(groupId)])
     setMembers(mem); setData(d)
   }
+  const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
-    let unsub = () => {}
+    let unsub = () => {}, live = true
+    setFailed(false)
     ;(async () => {
       const g = await db.getGroup(groupId)
       g.join_code = g.join_code || await db.ensureJoinCode(g)
@@ -849,16 +887,21 @@ function GroupView({ groupId, user, onBack }) {
       // post any due copies of recurring expenses, then reload (we're not subscribed yet)
       const made = await db.runRecurring(g, d.expenses, d.splits, user.id).catch(() => 0)
       if (made) { logActivity(g, 'SplitIt', `added ${made} recurring expense${made > 1 ? 's' : ''}`); await load() }
-      unsub = db.subscribeGroup(g.team_id, load)
-    })().catch(() => {})
-    return () => unsub()
-  }, [groupId])
+      if (live) unsub = db.subscribeGroup(g.team_id, () => load().catch(() => {}))
+    })().catch(() => live && setFailed(true))
+    return () => { live = false; unsub() }
+  }, [groupId, attempt])
 
-  if (!group) return <main className="wrap"><div className="muted pad">Loading…</div></main>
+  if (!group || !members.length) return <main className="wrap">
+    <button className="back" onClick={onBack}><Ic.back /> Groups</button>
+    {failed ? <LoadError onRetry={() => setAttempt(a => a + 1)} /> : <Skeleton rows={5} />}
+  </main>
   const cur = group.currency
   const { expenses, splits, settlements, activity } = data
   const nets = computeNets(members, expenses, splits, settlements)
   const suggestions = simplify(nets)
+  // an open expense follows other people's edits, and closes if they delete it
+  const detail = sheet?.detail && expenses.find(e => e.id === sheet.detail.id)
 
   return (
     <main className="wrap">
@@ -934,8 +977,8 @@ function GroupView({ groupId, user, onBack }) {
       {sheet === 'add' && <AddExpense group={group} members={members} user={user} onClose={() => setSheet(null)} />}
       {sheet === 'people' && <ManagePeople group={group} members={members} nets={nets} user={user} onClose={() => setSheet(null)} onLeave={onBack} onChanged={load} />}
       {sheet && sheet.settle !== undefined && <SettleUp group={group} members={members} user={user} pre={sheet.settle} onClose={() => setSheet(null)} />}
-      {sheet && sheet.detail && <ExpenseDetail group={group} members={members} user={user} expense={sheet.detail}
-        splits={splits.filter(s => s.expense_id === sheet.detail.id)} onClose={() => setSheet(null)} onEdit={() => setSheet({ edit: sheet.detail })}
+      {detail && <ExpenseDetail group={group} members={members} user={user} expense={detail}
+        splits={splits.filter(s => s.expense_id === detail.id)} onClose={() => setSheet(null)} onEdit={() => setSheet({ edit: detail })}
         onDeleted={(expense, sp) => setUndo({ expense, splits: sp })} />}
       {undo && <Toast key={undo.expense.id} text={`Deleted “${undo.expense.description}”`} action="Undo" onAction={restore} onDone={() => setUndo(null)} />}
       {sheet && sheet.edit && <AddExpense group={group} members={members} user={user}
@@ -974,7 +1017,8 @@ function ManagePeople({ group, members, nets, user, onClose, onLeave, onChanged 
   }
   async function remove(m) {
     setErr('')
-    if (m.guest && nets[m.user_id]) return setErr(`${m.display_name} still has a balance. Settle up first, or link them to their account.`)
+    if (nets[m.user_id]) return setErr(`${m.display_name} still has a balance. Settle up first${m.guest ? ', or link them to their account' : ''}.`)
+    if (!window.confirm(`Remove ${m.display_name} from “${group.name}”?`)) return
     try {
       if (m.guest) { await db.removeGuest(group.id, m.user_id); onChanged() }
       else { await db.removeMember(group.team_id, m.membership_id); onClose() }
@@ -998,6 +1042,9 @@ function ManagePeople({ group, members, nets, user, onClose, onLeave, onChanged 
   }
   const accounts = members.filter(m => !m.guest)
   async function leave() {
+    setErr('')
+    if (nets[user.id]) return setErr('You still have a balance here. Settle up before leaving.')
+    if (!window.confirm(`Leave “${group.name}”? You’ll need a new invite to come back.`)) return
     try { await db.leaveGroup(group.team_id, myMembership.membership_id); onLeave() } catch (e2) { setErr(e2.message) }
   }
   async function del() {
@@ -1083,7 +1130,7 @@ function CodeChip({ code }) {
 function ExpenseList({ members, expenses, splits, cur, me, onOpen }) {
   const [f, setF] = useState({ q: '', cat: '', who: '' })
   if (!expenses.length) return <div className="empty">No expenses yet.<br />Tap “Add expense” to start.</div>
-  const shown = filterExpenses(expenses, f)
+  const shown = [...filterExpenses(expenses, f)].sort((a, b) => (b.spent_on || '').localeCompare(a.spent_on || ''))
   const set = k => e => setF(s => ({ ...s, [k]: e.target.value }))
   return (
     <>
@@ -1112,7 +1159,8 @@ function ExpenseList({ members, expenses, splits, cur, me, onOpen }) {
             <div className="right">
               {iPaid
                 ? <><div className="tiny muted">you lent</div><div className="num pos">{money(lent, cur)}</div></>
-                : <><div className="tiny muted">you borrowed</div><div className="num neg">{money(mine, cur)}</div></>}
+                : mine ? <><div className="tiny muted">you borrowed</div><div className="num neg">{money(mine, cur)}</div></>
+                  : <div className="tiny faint">not involved</div>}
             </div>
           </button>
         )
@@ -1133,7 +1181,9 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const [notes, setNotes] = useState(edit?.notes || '')
   // A group's saved default split (percent / shares / who's in) pre-fills new expenses.
   const def = !edit && group.default_split ? (() => { try { return JSON.parse(group.default_split) } catch { return null } })() : null
-  const [type, setType] = useState(edit ? 'exact' : def?.type || 'equal')
+  // an even split reopens as "Equally", so changing the total just works
+  const evenEdit = editSplits?.length && Math.max(...editSplits.map(s => s.owed_cents)) - Math.min(...editSplits.map(s => s.owed_cents)) <= 1
+  const [type, setType] = useState(edit ? (evenEdit ? 'equal' : 'exact') : def?.type || 'equal')
   const [mode, setMode] = useState(edit || def ? 'custom' : 'iPaidEqual')
   const [saveDef, setSaveDef] = useState(!!def)
   const [other, setOther] = useState(null)
@@ -1159,7 +1209,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   }, [fx?.cur, fx?.to])
   useEffect(() => { // keep the total in the group's currency in step
     if (!fx) return
-    const c = toCents(fx.amount), r = parseFloat(fx.rate)
+    const c = toCents(fx.amount), r = parseFloat(fx.rate.replace(',', '.'))
     if (c > 0 && r > 0) setAmount((convertCents(c, r) / 100).toFixed(2))
   }, [fx?.amount, fx?.rate])
   const openFx = () => { const to = groupCode(); setFx({ cur: to === 'EUR' ? 'USD' : 'EUR', to, amount: '', rate: '' }) }
@@ -1205,7 +1255,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
   const itemRes = eff.T === 'items' ? itemSplit(amt, items.map(i => ({ cents: toCents(i.price), people: i.people })), eff.P) : null
   const picks = itemRes ? Object.keys(itemRes.owed) : members.map(m => m.user_id).filter(id => !eff.X.includes(id))
   const toggle = id => setOut(o => o.includes(id) ? o.filter(x => x !== id) : [...o, id])
-  const vals = Object.fromEntries(picks.map(id => [id, eff.T === 'exact' ? toCents(txt[id]) : (parseFloat(txt[id]) || 0)]))
+  const vals = Object.fromEntries(picks.map(id => [id, Math.max(0, eff.T === 'exact' ? toCents(txt[id]) : toCents(txt[id]) / 100)]))
   const owed = itemRes ? itemRes.owed : picks.length ? splitsFromDraft({ amount: amt, type: eff.T, picks, vals, payer: eff.P }) : {}
   const newItem = (name = '', price = '') => ({ key: Math.random().toString(36).slice(2), name, price, people: allIds })
   const setItem = (key, patch) => setItems(list => list.map(i => i.key === key ? { ...i, ...patch } : i))
@@ -1270,7 +1320,8 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
       if (queued) return onClose() // saved on this device; uploads when back online
       // remember (or forget) this group's default split; amounts aren't reusable so 'exact' never becomes a default
       const wantDef = !quick && saveDef && type !== 'exact' && type !== 'items'
-      if (wantDef) await db.setDefaultSplit(group.id, { type, txt, out }).catch(() => {})
+      if (edit) { /* editing never changes the group's default */ }
+      else if (wantDef) await db.setDefaultSplit(group.id, { type, txt, out }).catch(() => {})
       else if (group.default_split && !quick) await db.setDefaultSplit(group.id, null).catch(() => {})
       logActivity(group, myName, `${edit ? 'edited' : 'added'} “${desc.trim()}” · ${money(amt, cur)}`)
       onClose()
@@ -1397,7 +1448,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
           })}
         </div>}
         <div className={'remain ' + status} role="status">{remain.ok && <Ic.check />}<span>{remain.text}</span></div>
-        {type !== 'exact' && type !== 'items' && <label className="defchk"><input type="checkbox" checked={saveDef} onChange={e => setSaveDef(e.target.checked)} />
+        {!edit && type !== 'exact' && type !== 'items' && <label className="defchk"><input type="checkbox" checked={saveDef} onChange={e => setSaveDef(e.target.checked)} />
           <span>Use this split by default in {group.name}</span></label>}
         </>}
       </section>
@@ -1407,7 +1458,7 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
           <select className="inp" value={cat} onChange={e => setCat(e.target.value)}>
             {Object.keys(CATS).map(c => <option key={c} value={c}>{CATS[c]} {c}</option>)}</select></label>
         <label className="fld"><span>Date</span>
-          <input className="inp" type="date" value={date} max={todayISO()} onChange={e => setDate(e.target.value)} /></label>
+          <input className="inp" type="date" value={date} max={todayISO()} onChange={e => setDate(e.target.value || todayISO())} /></label>
       </div>
       <details className="more" open={!!(edit?.repeat || edit?.notes) || undefined}>
         <summary>More options{repeat !== 'none' ? ` · repeats ${repeat}` : ''}{notes.trim() ? ' · note' : ''}</summary>
@@ -1426,12 +1477,13 @@ function AddExpense({ group, members, user, onClose, edit, editSplits }) {
 
 /* ---------------- Settle up ---------------- */
 function SettleUp({ group, members, user, pre, onClose }) {
-  const [from, setFrom] = useState(pre?.from || members[0]?.user_id)
-  const [to, setTo] = useState(pre?.to || members[1]?.user_id || members[0]?.user_id)
+  const [from, setFrom] = useState(pre?.from || user.id)
+  const [to, setTo] = useState(pre?.to || members.find(m => m.user_id !== user.id)?.user_id || user.id)
   const [amount, setAmount] = useState(pre ? (pre.amount / 100).toFixed(2) : '')
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
   const [copied, setCopied] = useState('')
+  const [busy, setBusy] = useState(false)
   const cur = group.currency
   const a = toCents(amount)
   const toM = members.find(m => m.user_id === to), fromM = members.find(m => m.user_id === from), fromName = nameOf(members, from), toName = nameOf(members, to)
@@ -1449,11 +1501,12 @@ function SettleUp({ group, members, user, pre, onClose }) {
   async function record() {
     if (a <= 0) return setErr('Enter an amount')
     if (from === to) return setErr('Pick two different people')
+    setBusy(true); setErr('')
     try {
       await db.addSettlement(group, { from_member: from, to_member: to, amount_cents: a })
       logActivity(group, displayName(user), `${nameOf(members, from)} paid ${nameOf(members, to)} ${money(a, cur)}${note.trim() ? ` — “${note.trim().slice(0, 200)}”` : ''}`)
       onClose()
-    } catch (e) { setErr(e.message || 'Could not record') }
+    } catch (e) { setBusy(false); setErr(e.message || 'Could not record') }
   }
   return (
     <Sheet title="Record a payment" onClose={onClose}>
@@ -1493,7 +1546,7 @@ function SettleUp({ group, members, user, pre, onClose }) {
       </div>}
       <label className="fld"><span>Note (optional)</span><input className="inp" maxLength={200} value={note} onChange={e => setNote(e.target.value)} placeholder="e-Transfer, cash…" /></label>
       {err && <div className="err"><Ic.alert />{err}</div>}
-      <button className="btn block" onClick={record}>Record payment</button>
+      <button className="btn block" onClick={record} disabled={busy}>{busy ? 'Recording…' : 'Record payment'}</button>
     </Sheet>
   )
 }
@@ -1502,6 +1555,7 @@ function SettleUp({ group, members, user, pre, onClose }) {
 function Chat({ group, user, members }) {
   const [msgs, setMsgs] = useState([])
   const [text, setText] = useState('')
+  const [err, setErr] = useState('')
   const endRef = useRef(null)
   const myName = displayName(user)
 
@@ -1514,7 +1568,8 @@ function Chat({ group, user, members }) {
 
   async function send(e) {
     e.preventDefault(); const body = text.trim(); if (!body) return; setText('')
-    try { await db.sendMessage(group, user.id, myName, body) } catch { /* ignore */ }
+    setErr('')
+    try { await db.sendMessage(group, user.id, myName, body) } catch { setText(t => t || body); setErr('Message not sent. Check your connection and try again.') }
   }
   return (
     <div className="chat">
@@ -1531,6 +1586,7 @@ function Chat({ group, user, members }) {
         ))}
         <div ref={endRef} />
       </div>
+      {err && <div className="err pad" role="alert"><Ic.alert />{err}</div>}
       <form className="composer" onSubmit={send}>
         <input className="inp" value={text} onChange={e => setText(e.target.value)} placeholder="Message…" />
         <button className="btn" aria-label="Send"><Ic.send /></button>
@@ -1547,107 +1603,9 @@ function timeAgo(ts) {
   if (d < 86400) return Math.floor(d / 3600) + 'h ago'
   return Math.floor(d / 86400) + 'd ago'
 }
-// Reusable chart block. Pass `members` to also show the "Who paid" bar.
-function Charts({ expenses, cur, members, stats = true }) {
-  const byCat = {}
-  expenses.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount_cents })
-  const catData = Object.entries(byCat).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value)
-  const total = catData.reduce((s, c) => s + c.value, 0)
-  const count = expenses.length
-  const avg = count ? Math.round(total / count) : 0
-  const topCat = catData[0]
-  const byDay = {}
-  expenses.forEach(e => { if (e.spent_on) byDay[e.spent_on] = (byDay[e.spent_on] || 0) + e.amount_cents })
-  const timeData = Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)).map(([d, v]) => ({ date: fmtDate(d), value: v }))
-  const showPayers = members && members.length > 0
-  const byPayer = {}
-  if (showPayers) expenses.forEach(e => { byPayer[e.paid_by] = (byPayer[e.paid_by] || 0) + e.amount_cents })
-  const payerData = Object.entries(byPayer).map(([id, value]) => ({ name: nameOf(members, id), value })).sort((a, b) => b.value - a.value)
-
-  const css = getComputedStyle(document.documentElement)
-  const axis = css.getPropertyValue('--muted').trim() || '#888'
-  const accent = css.getPropertyValue('--accent').trim() || '#1f6b52'
-  const tip = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, color: 'var(--fg)', fontSize: 13 }
-
-  function exportCsv() {
-    // quote every cell; text starting with = + - @ would run as a formula in Excel/Sheets (CSV injection)
-    const esc = v => { let t = String(v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"' }
-    const lines = ['Date,Description,Category,Amount']
-    expenses.forEach(e => lines.push([e.spent_on || '', esc(e.description || ''), e.category, (e.amount_cents / 100).toFixed(2)].join(',')))
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }))
-    a.download = 'expenses.csv'; a.click(); URL.revokeObjectURL(a.href)
-  }
-
-  if (total === 0) return <div className="empty">Add an expense to see spending charts.</div>
-  return (
-    <>
-      {stats && <div className="stats">
-        <div className="stat"><div className="stat-num num">{money(total, cur)}</div><div className="stat-lbl">total spent</div></div>
-        <div className="stat"><div className="stat-num num">{count}</div><div className="stat-lbl">expenses</div></div>
-        <div className="stat"><div className="stat-num num">{money(avg, cur)}</div><div className="stat-lbl">avg / expense</div></div>
-        <div className="stat"><div className="stat-num">{CATS[topCat?.name] || '🧾'} {topCat?.name || '—'}</div><div className="stat-lbl">top category</div></div>
-      </div>}
-
-      {timeData.length >= 2 && <>
-        <div className="eyebrow mt">Spending over time</div>
-        <div className="card pad">
-          <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={timeData} margin={{ left: 0, right: 8, top: 6, bottom: 0 }}>
-              <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={accent} stopOpacity={0.35} /><stop offset="100%" stopColor={accent} stopOpacity={0} />
-              </linearGradient></defs>
-              <CartesianGrid vertical={false} stroke={axis} strokeOpacity={0.15} />
-              <XAxis dataKey="date" tick={{ fill: axis, fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis hide />
-              <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
-              <Area type="monotone" dataKey="value" stroke={accent} strokeWidth={2} fill="url(#g)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </>}
-
-      <div className="eyebrow between mt">Spending by category
-        <button className="linklike" onClick={exportCsv}><Ic.download /> Export CSV</button></div>
-      <div className="card pad">
-        <div className="donut-wrap">
-          <ResponsiveContainer width="100%" height={210}>
-            <PieChart>
-              <Pie data={catData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={2} stroke="none">
-                {catData.map((d, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-              </Pie>
-              <Tooltip formatter={v => money(v, cur)} contentStyle={tip} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="donut-center"><div className="tiny muted">Total spent</div><div className="num donut-total">{money(total, cur)}</div></div>
-        </div>
-        <div className="legend">
-          {catData.map((d, i) => (
-            <div className="leg" key={d.name}>
-              <span className="dot" style={{ background: COLORS[i % COLORS.length] }} />
-              <span className="grow">{CATS[d.name] || '🧾'} {d.name}</span>
-              <span className="num">{money(d.value, cur)}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {showPayers && <>
-        <div className="eyebrow mt">Who paid</div>
-        <div className="card pad">
-          <ResponsiveContainer width="100%" height={Math.max(110, payerData.length * 48)}>
-            <BarChart data={payerData} layout="vertical" margin={{ left: 0, right: 18, top: 2, bottom: 2 }}>
-              <XAxis type="number" hide />
-              <YAxis type="category" dataKey="name" width={84} tick={{ fill: axis, fontSize: 12 }} axisLine={false} tickLine={false} />
-              <Tooltip formatter={v => money(v, cur)} cursor={{ fill: 'transparent' }} contentStyle={tip} />
-              <Bar dataKey="value" fill={accent} radius={[0, 8, 8, 0]} barSize={22} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </>}
-    </>
-  )
-}
+// Charts pull in recharts, so they load after the first screen (and are cached for offline, see vite.config.js).
+const LazyCharts = lazy(() => import('./Charts.jsx').catch(() => ({ default: () => <div className="empty">Charts couldn’t load. Reload when you’re online.</div> })))
+const Charts = props => <Suspense fallback={<Skeleton rows={2} />}><LazyCharts {...props} /></Suspense>
 
 const monthName = (ym, year) => new Date(ym + '-01T00:00').toLocaleDateString(undefined, year ? { month: 'long', year: 'numeric' } : { month: 'long' })
 
@@ -1856,7 +1814,7 @@ function SettledBanner({ settlements, members, cur, archived, onToggle }) {
   return (
     <div className="settled" role="status">
       <div className="settled-t">All settled 🎉</div>
-      <p>{last ? <>Last payment: <b>{nameOf(members, last.from_member)}</b> paid <b>{nameOf(members, last.to_member)}</b> <span className="num">{money(last.amount_cents, cur)}</span> on {fmtDate(String(last.created_at).slice(0, 10))}.</> : 'Everyone is even.'}</p>
+      <p>{last ? <>Last payment: <b>{nameOf(members, last.from_member)}</b> paid <b>{nameOf(members, last.to_member)}</b> <span className="num">{money(last.amount_cents, cur)}</span> on {fmtDate(localDay(last.created_at))}.</> : 'Everyone is even.'}</p>
       <div className="settled-actions">
         <button className="btn sm" onClick={onToggle}>{archived ? 'Unarchive' : 'Archive group'}</button>
         <span className="tiny muted">{archived ? 'Archived on your Home. ' : ''}Only your Home is tidied; it comes back if anything new is owed.</span>
@@ -1876,7 +1834,7 @@ function GroupActivityTab({ activity, expenses, settlements = [], cur, members }
             <div className="row" key={s.id}>
               <Avatar members={members} id={s.from_member} />
               <div className="grow"><b>{nameOf(members, s.from_member)}</b> <span className="muted">paid</span> <b>{nameOf(members, s.to_member)}</b>
-                <div className="tiny faint">{fmtDate(String(s.created_at).slice(0, 10))}</div></div>
+                <div className="tiny faint">{fmtDate(localDay(s.created_at))}</div></div>
               <div className="num pos">{money(s.amount_cents, cur)}</div>
             </div>
           ))}
@@ -1902,6 +1860,7 @@ function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit,
   const [comments, setComments] = useState([])
   const [text, setText] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
+  const [err, setErr] = useState('')
   const myName = displayName(user)
   const cur = group.currency
 
@@ -1913,10 +1872,11 @@ function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit,
 
   async function send(e) {
     e.preventDefault(); const body = text.trim(); if (!body) return; setText('')
-    try { await db.addComment(group, expense.id, user.id, myName, body) } catch { /* ignore */ }
+    setErr('')
+    try { await db.addComment(group, expense.id, user.id, myName, body) } catch { setText(t => t || body); setErr('Comment not sent. Try again.') }
   }
   async function del() {
-    try { await db.deleteExpense(expense.id); logActivity(group, myName, `deleted “${expense.description}”`); onDeleted?.(expense, splits); onClose() } catch { /* ignore */ }
+    try { await db.deleteExpense(expense.id); logActivity(group, myName, `deleted “${expense.description}”`); onDeleted?.(expense, splits); onClose() } catch { setConfirmDel(false); setErr('Couldn’t delete. Check your connection and try again.') }
   }
 
   return (
@@ -1947,6 +1907,7 @@ function ExpenseDetail({ group, members, user, expense, splits, onClose, onEdit,
           ? <button className="btn danger" style={{ flex: 1 }} onClick={del}>Confirm delete</button>
           : <button className="btn ghost danger-text" style={{ flex: 1 }} onClick={() => setConfirmDel(true)}><Ic.trash /> Delete</button>}
       </div>
+      {err && <div className="err" role="alert"><Ic.alert />{err}</div>}
       <div className="eyebrow">Comments</div>
       <div className="comments">
         {comments.length === 0 && <div className="muted tiny">No comments yet.</div>}
@@ -1966,6 +1927,17 @@ function logActivity(group, name, text) { db.logActivity(group, name, text) }
 /* ---------------- Sheet (modal) ---------------- */
 function Sheet({ title, onClose, children }) {
   const bgRef = useRef(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  const [opener] = useState(() => document.activeElement) // read before autoFocus moves it
+  useEffect(() => {
+    const esc = e => { if (e.key === 'Escape') close.current() }
+    document.addEventListener('keydown', esc)
+    document.body.style.overflow = 'hidden'
+    const box = bgRef.current.firstChild
+    if (!box.contains(document.activeElement)) box.focus()
+    return () => { document.removeEventListener('keydown', esc); document.body.style.overflow = ''; opener?.focus?.() }
+  }, [])
   // iOS Safari doesn't shrink fixed elements when the keyboard opens; it only shrinks the
   // visual viewport. Pin the backdrop to the visible area so the sheet sits above the keyboard.
   useEffect(() => {
@@ -1980,7 +1952,7 @@ function Sheet({ title, onClose, children }) {
   const onFocus = e => { if (e.target.matches('input,select,textarea')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300) }
   return (
     <div className="sheet-bg" ref={bgRef} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="sheet" onFocus={onFocus}>
+      <div className="sheet" onFocus={onFocus} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}>
         <div className="sheet-head"><h2>{title}</h2><button className="icon-btn" aria-label="Close" onClick={onClose}><Ic.close /></button></div>
         {children}
       </div>

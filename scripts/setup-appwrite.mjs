@@ -38,6 +38,8 @@ const collections = {
   messages: { attrs: [S('group_id'), S('user_id'), S('display_name', 128), S('body', 2000)], idx: ['group_id'] },
   activity: { attrs: [S('group_id'), S('actor_name', 128), S('text', 512)], idx: ['group_id'] },
   push_subs: { attrs: [S('user_id'), S('endpoint', 1000), S('p256dh', 200), S('auth', 100)], idx: ['user_id'] },
+  // join-code guess limiter: only the server function touches it (no client permissions at all)
+  join_attempts: { attrs: [S('user_id')], idx: [], perms: [] },
   comments: { attrs: [S('group_id'), S('expense_id'), S('user_id'), S('display_name', 128), S('body', 1000)], idx: ['expense_id', 'group_id'] },
 }
 
@@ -59,7 +61,7 @@ async function main() {
     console.log('\nCollection:', id)
     // documentSecurity=true so per-document team permissions govern read/update/delete;
     // any signed-in user may create (then the doc is locked to its group's team).
-    await ok409('collection', () => db.createCollection(DB, id, id, [Permission.create(Role.users())], true))
+    await ok409('collection', () => db.createCollection(DB, id, id, def.perms || [Permission.create(Role.users())], true))
     for (const [kind, key, a, b] of def.attrs) {
       if (kind === 's') await ok409('attr ' + key, () => db.createStringAttribute(DB, id, key, a, b))
       else await ok409('attr ' + key, () => db.createIntegerAttribute(DB, id, key, a /* required */))

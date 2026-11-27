@@ -1,5 +1,6 @@
 // Appwrite Function: push notifications for SplitIt.
-// 1) Database events on expenses: tell the rest of the group about adds / edits / deletes.
+// 1) Events: tell the rest of the group about expenses (add / edit / delete), payments, chat messages,
+//    comments, and people joining or leaving.
 // 2) Called by a signed-in user with { action: 'remind', groupId, toUserId, amount }: nudge one person to pay.
 // 3) Scheduled on the 1st of each month: "Your October recap" to everyone with notifications on.
 // Variables: APPWRITE_API_KEY, APP_DB_ID, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT.
@@ -43,6 +44,11 @@ export default async ({ req, res, log, error }) => {
   // ---- 3) monthly recap: runs on the schedule (1st of the month), or when run with the server key ----
   const trigger = req.headers['x-appwrite-trigger']
   if (trigger === 'schedule' || (body?.action === 'recap' && !req.headers['x-appwrite-user-id'])) {
+    // daily tidy-up of old join-code attempts (see join-by-code)
+    if (trigger === 'schedule') {
+      const old = await databases.listDocuments(DB, 'join_attempts', [Query.lessThan('$createdAt', new Date(Date.now() - 86400000).toISOString()), Query.limit(500)]).catch(() => ({ documents: [] }))
+      await Promise.all(old.documents.map(d => databases.deleteDocument(DB, 'join_attempts', d.$id).catch(() => {})))
+    }
     // The free plan only allows a daily schedule, so skip every day except the 1st.
     if (trigger === 'schedule' && new Date().getUTCDate() !== 1) return res.json({ ok: true, skipped: 'not the 1st' })
     try {
@@ -108,9 +114,45 @@ export default async ({ req, res, log, error }) => {
     }
   }
 
-  // ---- 1) expense added / edited / deleted ----
   const event = String(req.headers['x-appwrite-event'] || '')
-  const kind = event.endsWith('.create') ? 'added' : event.endsWith('.delete') ? 'deleted' : event.endsWith('.update') ? 'edited' : ''
+
+  // ---- 1b) payments, chat, comments, members ----
+  const other = event.match(/collections\.(settlements|messages|comments)\.documents\.[^.]+\.create$/)?.[1]
+    || event.match(/^teams\.[^.]+\.memberships\.[^.]+\.(create|delete)$/)?.[1]
+  if (other) {
+    try {
+      const joining = other === 'create' || other === 'delete'
+      const group = joining
+        ? (await databases.listDocuments(DB, 'groups', [Query.equal('team_id', String(body.teamId)), Query.limit(1)])).documents[0]
+        : await databases.getDocument(DB, 'groups', body.group_id)
+      if (!group) return res.json({ ok: true, skipped: 'no group yet' }) // the creator's own membership
+      const mems = (await teams.listMemberships(group.team_id, [Query.limit(100)])).memberships
+      const guests = JSON.parse(group.guests || '[]')
+      const nameOf = id => mems.find(m => m.userId === id)?.userName || guests.find(g => g.id === id)?.name || 'Someone'
+      const actorId = joining ? body.userId : other === 'settlements' ? req.headers['x-appwrite-user-id'] : body.user_id
+      const cur = group.currency || '$'
+      const clip = s => String(s || '').slice(0, 120)
+      let text
+      if (other === 'settlements') text = `${nameOf(body.from_member)} paid ${nameOf(body.to_member)} ${money(body.amount_cents, cur)}`
+      else if (other === 'messages') text = `${body.display_name}: ${clip(body.body)}`
+      else if (other === 'comments') {
+        const exp = await databases.getDocument(DB, 'expenses', body.expense_id).catch(() => null)
+        text = `${body.display_name} commented${exp ? ` on “${exp.description}”` : ''}: ${clip(body.body)}`
+      } else text = `${body.userName || 'Someone'} ${other === 'create' ? 'joined' : 'left'} the group`
+      const r = await pushTo(mems.map(m => m.userId).filter(id => id && id !== actorId), () => ({
+        title: `SplitIt · ${group.name}`, body: text, url: `/?group=${group.$id}`,
+        tag: other === 'messages' ? `chat-${group.$id}` : body.$id,
+      }))
+      log(`${other} ${body.$id}: sent ${r.sent}/${r.devices}`)
+      return res.json({ ok: true, ...r })
+    } catch (e) {
+      error(e.message)
+      return res.json({ ok: false, error: e.message }, 500)
+    }
+  }
+
+  // ---- 1) expense added / edited / deleted ----
+  const kind = !event.includes('collections.expenses.') ? '' : event.endsWith('.create') ? 'added' : event.endsWith('.delete') ? 'deleted' : event.endsWith('.update') ? 'edited' : ''
   const doc = body
   if (!kind || !doc?.group_id) return res.json({ ok: true, skipped: 'not an expense event' })
 

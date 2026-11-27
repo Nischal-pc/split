@@ -18,9 +18,13 @@ const FUNCTIONS = {
   'join-by-code': { name: 'Join by code', execute: ['users'], events: [], vars: { APPWRITE_API_KEY: key, APP_DB_ID: DB } },
   // Runs on expense changes, and signed-in users can call it for reminders (it checks group membership).
   'notify-expense': {
-    name: 'Notify group of expense changes', execute: ['users'],
+    name: 'Notify group of changes', execute: ['users'],
     interval: 1440, // daily (free plan has no cron); the function only sends the monthly recap on the 1st
-    events: ['create', 'update', 'delete'].map(e => `databases.${DB}.collections.expenses.documents.*.${e}`),
+    events: [
+      ...['create', 'update', 'delete'].map(e => `databases.${DB}.collections.expenses.documents.*.${e}`),
+      ...['settlements', 'messages', 'comments'].map(c => `databases.${DB}.collections.${c}.documents.*.create`),
+      'teams.*.memberships.*.create', 'teams.*.memberships.*.delete',
+    ],
     vars: { APPWRITE_API_KEY: key, APP_DB_ID: DB, VAPID_PUBLIC_KEY: process.env.VITE_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
       VAPID_SUBJECT: process.env.VAPID_SUBJECT || 'https://split-lake-tau.vercel.app' },
   },

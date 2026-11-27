@@ -1,9 +1,10 @@
 // All backend access lives here so the UI never touches Appwrite directly.
 import { ID, Query, Permission, Role, OAuthProvider } from 'appwrite'
 import { client, account, databases, teams, functions, DB, C, VAPID_PUBLIC_KEY } from './appwrite.js'
-import { dueDates, nextDate, peopleBalances, myShares } from './split.js'
+import { dueDates, nextDate, peopleBalances, myShares, money, localDay } from './split.js'
 
-const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
+// secure random: an invite code is the only thing needed to get into a group (256 % 32 = 0, so no bias)
+const genCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('')
 
 const norm = d => ({ ...d, id: d.$id, created_at: d.$createdAt })
 const teamPerms = teamId => [
@@ -30,6 +31,17 @@ async function cached(key, fn) {
 }
 function clearCache() { Object.keys(localStorage).filter(k => k.startsWith(OFF) || k === OUTBOX).forEach(k => localStorage.removeItem(k)) }
 
+// Every matching document, page by page. A capped single read would silently compute wrong balances.
+async function listAll(collection, queries = []) {
+  const documents = []
+  for (let after; ;) {
+    const page = (await databases.listDocuments(DB, collection, [...queries, Query.limit(500), ...(after ? [Query.cursorAfter(after)] : [])])).documents
+    documents.push(...page)
+    if (page.length < 500) return { documents }
+    after = page[page.length - 1].$id
+  }
+}
+
 /* ---------- auth ---------- */
 export async function getUser() {
   try {
@@ -52,7 +64,10 @@ export function signInWithGoogle() {
   // Full-page redirect to Google and back; the session is set on return.
   account.createOAuth2Session(OAuthProvider.Google, window.location.origin, window.location.origin)
 }
-export async function signOut() { clearCache(); try { await account.deleteSession('current') } catch { /* ignore */ } }
+export async function signOut() {
+  await disablePush().catch(() => {}) // or this device keeps getting the signed-out person's notifications
+  clearCache(); try { await account.deleteSession('current') } catch { /* ignore */ }
+}
 export async function recover(email) { await account.createRecovery(email, window.location.origin) }
 export async function confirmRecovery(userId, secret, password) { await account.updateRecovery(userId, secret, password) }
 
@@ -85,9 +100,7 @@ async function _listGroups(userId) {
   const groups = res.documents.map(norm)
   // my net per group from everything I can read
   const [e, s, st] = await Promise.all([
-    databases.listDocuments(DB, C.expenses, [Query.limit(2000)]),
-    databases.listDocuments(DB, C.splits, [Query.limit(5000)]),
-    databases.listDocuments(DB, C.settlements, [Query.limit(2000)]),
+    listAll(C.expenses), listAll(C.splits), listAll(C.settlements),
   ])
   const net = {}; groups.forEach(g => { net[g.id] = 0 })
   e.documents.forEach(x => { if (x.paid_by === userId && net[x.group_id] != null) net[x.group_id] += x.amount_cents })
@@ -104,9 +117,7 @@ async function _listPeople(userId) {
   if (!ids.length) return []
   const [gr, e, s, st] = await Promise.all([
     databases.listDocuments(DB, C.groups, [Query.equal('team_id', ids), Query.limit(100)]),
-    databases.listDocuments(DB, C.expenses, [Query.limit(2000)]),
-    databases.listDocuments(DB, C.splits, [Query.limit(5000)]),
-    databases.listDocuments(DB, C.settlements, [Query.limit(2000)]),
+    listAll(C.expenses), listAll(C.splits), listAll(C.settlements),
   ])
   const groups = await Promise.all(gr.documents.map(async g => ({
     id: g.$id, team_id: g.team_id, name: g.name, currency: g.currency,
@@ -146,7 +157,7 @@ export async function ensureJoinCode(group) {
 }
 // All expenses across the user's groups (for home charts).
 async function _listAllExpenses() {
-  const r = await databases.listDocuments(DB, C.expenses, [Query.orderDesc('$createdAt'), Query.limit(2000)])
+  const r = await listAll(C.expenses, [Query.orderDesc('$createdAt')])
   return r.documents.map(norm)
 }
 // Recent activity across all the user's groups (RLS limits to groups they belong to).
@@ -180,8 +191,8 @@ export async function addGuest(groupId, name) {
 export async function removeGuest(groupId, guestId) { await saveGuests(groupId, list => list.filter(x => x.id !== guestId)) }
 // Move everything recorded for a guest onto a real member, then drop the guest.
 export async function mergeGuest(groupId, guestId, userId) {
-  const q = [Query.equal('group_id', groupId), Query.limit(5000)]
-  const [e, s, st] = await Promise.all([C.expenses, C.splits, C.settlements].map(c => databases.listDocuments(DB, c, q)))
+  const q = [Query.equal('group_id', groupId)]
+  const [e, s, st] = await Promise.all([C.expenses, C.splits, C.settlements].map(c => listAll(c, q)))
   const swap = v => v === guestId ? userId : v
   await Promise.all([
     ...e.documents.filter(d => d.paid_by === guestId).map(d => databases.updateDocument(DB, C.expenses, d.$id, { paid_by: userId })),
@@ -229,9 +240,9 @@ export async function leaveGroup(teamId, myMembershipId) { await teams.deleteMem
 /* ---------- group data ---------- */
 async function _loadGroupData(groupId) {
   const [exp, spl, set, act] = await Promise.all([
-    databases.listDocuments(DB, C.expenses, [Query.equal('group_id', groupId), Query.orderDesc('$createdAt'), Query.limit(500)]),
-    databases.listDocuments(DB, C.splits, [Query.equal('group_id', groupId), Query.limit(2000)]),
-    databases.listDocuments(DB, C.settlements, [Query.equal('group_id', groupId), Query.orderDesc('$createdAt'), Query.limit(500)]),
+    listAll(C.expenses, [Query.equal('group_id', groupId), Query.orderDesc('$createdAt')]),
+    listAll(C.splits, [Query.equal('group_id', groupId)]),
+    listAll(C.settlements, [Query.equal('group_id', groupId), Query.orderDesc('$createdAt')]),
     databases.listDocuments(DB, C.activity, [Query.equal('group_id', groupId), Query.orderDesc('$createdAt'), Query.limit(60)]),
   ])
   return {
@@ -241,13 +252,18 @@ async function _loadGroupData(groupId) {
 }
 export function subscribeGroup(teamId, cb) {
   const chans = [C.expenses, C.splits, C.settlements, C.activity].map(c => `databases.${DB}.collections.${c}.documents`)
-  chans.push(`teams.${teamId}.memberships`)
-  return client.subscribe(chans, () => cb())
+  chans.push('memberships', `teams.${teamId}`, `databases.${DB}.collections.${C.groups}.documents`)
+  let t
+  const unsubscribe = client.subscribe(chans, e => {
+    if (e.payload?.teamId && e.payload.teamId !== teamId) return // someone else's group membership
+    clearTimeout(t); t = setTimeout(cb, 400)
+  })
+  return () => { clearTimeout(t); unsubscribe() }
 }
 
 // Any change to expenses, payments or groups you can see (used by the desktop sidebar to stay current).
 export function subscribeAll(cb) {
-  return client.subscribe([C.expenses, C.splits, C.settlements, C.groups].map(c => `databases.${DB}.collections.${c}.documents`), () => cb())
+  return client.subscribe(['memberships', ...[C.expenses, C.splits, C.settlements, C.groups, C.activity].map(c => `databases.${DB}.collections.${c}.documents`)], () => cb())
 }
 
 export async function logActivity(group, actorName, text) {
@@ -258,21 +274,36 @@ export async function logActivity(group, actorName, text) {
 /* ---------- expenses ---------- */
 // `extra` holds optional fields (repeat, next_on, notes); callers only include keys that are set,
 // so saving still works on a backend that hasn't been re-provisioned yet.
-export async function addExpense(group, { description, amount_cents, paid_by, category, spent_on, owed, extra = {} }, userId) {
-  const exp = await databases.createDocument(DB, C.expenses, ID.unique(),
-    { group_id: group.id, description, amount_cents, paid_by, category, spent_on, created_by: userId, ...extra }, teamPerms(group.team_id))
-  await Promise.all(Object.entries(owed).map(([member_id, owed_cents]) =>
-    databases.createDocument(DB, C.splits, ID.unique(),
-      { expense_id: exp.$id, group_id: group.id, member_id, owed_cents }, teamPerms(group.team_id))))
-  return exp.$id
-}
-export async function updateExpense(group, expenseId, { description, amount_cents, paid_by, category, spent_on, owed, extra = {} }) {
-  await databases.updateDocument(DB, C.expenses, expenseId, { description, amount_cents, paid_by, category, spent_on, ...extra, edited_at: new Date().toISOString() })
-  const old = await databases.listDocuments(DB, C.splits, [Query.equal('expense_id', expenseId), Query.limit(2000)])
-  await Promise.all(old.documents.map(d => databases.deleteDocument(DB, C.splits, d.$id)))
-  await Promise.all(Object.entries(owed).map(([member_id, owed_cents]) =>
-    databases.createDocument(DB, C.splits, ID.unique(),
+const createSplits = (group, expenseId, owed, idFor = () => ID.unique()) => Promise.allSettled(
+  Object.entries(owed).sort(([a], [b]) => a.localeCompare(b)).map(([member_id, owed_cents], i) =>
+    databases.createDocument(DB, C.splits, idFor(i),
       { expense_id: expenseId, group_id: group.id, member_id, owed_cents }, teamPerms(group.team_id))))
+const failure = results => results.find(r => r.status === 'rejected' && r.reason?.code !== 409)?.reason
+const splitsOf = expenseId => listAll(C.splits, [Query.equal('expense_id', expenseId)])
+
+// Safe to repeat with the same id, even from two devices at once: split ids derive from the expense id,
+// so whatever already exists is skipped (409) instead of duplicated.
+export async function addExpense(group, { description, amount_cents, paid_by, category, spent_on, owed, extra = {} }, userId, id = ID.unique()) {
+  try {
+    await databases.createDocument(DB, C.expenses, id,
+      { group_id: group.id, description, amount_cents, paid_by, category, spent_on, created_by: userId, ...extra }, teamPerms(group.team_id))
+  } catch (e) { if (e.code !== 409) throw e }
+  const err = failure(await createSplits(group, id, owed, i => `${id}_${i}`))
+  if (err) throw err
+  return id
+}
+// New splits go in before the old ones come out, so a failure never leaves an expense with no split.
+export async function updateExpense(group, expenseId, { description, amount_cents, paid_by, category, spent_on, owed, extra = {} }) {
+  const old = (await splitsOf(expenseId)).documents
+  const made = await createSplits(group, expenseId, owed)
+  try {
+    if (failure(made)) throw failure(made)
+    await databases.updateDocument(DB, C.expenses, expenseId, { description, amount_cents, paid_by, category, spent_on, ...extra, edited_at: new Date().toISOString() })
+  } catch (e) {
+    await Promise.allSettled(made.filter(r => r.value).map(r => databases.deleteDocument(DB, C.splits, r.value.$id)))
+    throw e
+  }
+  await Promise.all(old.map(d => databases.deleteDocument(DB, C.splits, d.$id)))
 }
 export async function deleteExpense(expenseId) {
   const splits = await databases.listDocuments(DB, C.splits, [Query.equal('expense_id', expenseId), Query.limit(2000)])
@@ -280,22 +311,27 @@ export async function deleteExpense(expenseId) {
   await databases.deleteDocument(DB, C.expenses, expenseId)
 }
 
-// Materialize due copies of recurring expenses. Returns how many were created.
-// The template's next_on is advanced *before* copying so a second viewer loading at the same time
-// usually sees nothing due. shortcut: not a true lock — two simultaneous loads can still double-post; move to a scheduled Appwrite Function if that shows up.
+// Materialize due copies of recurring expenses. Returns how many were posted.
+// Each copy's id comes from the template and date, so two people opening the group can't double-post.
+// next_on moves only after every copy exists, so a failure is picked up on the next visit.
 export async function runRecurring(group, expenses, splits, userId) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDay()
   let made = 0
   for (const e of expenses) {
     if (!e.repeat || !e.next_on) continue
     const dates = dueDates(e.next_on, e.repeat, today)
     if (!dates.length) continue
-    await databases.updateDocument(DB, C.expenses, e.id, { next_on: nextDate(dates[dates.length - 1], e.repeat) })
     const owed = Object.fromEntries(splits.filter(s => s.expense_id === e.id).map(s => [s.member_id, s.owed_cents]))
+    const extra = {}
+    if (e.notes) extra.notes = e.notes
+    if (e.orig_cur) { extra.orig_amount = e.orig_amount; extra.orig_cur = e.orig_cur }
+    const base = e.id.slice(-24).replace(/^[^a-zA-Z0-9]+/, '') // Appwrite ids: 36 chars max, must start alphanumeric
     for (const d of dates) {
-      await addExpense(group, { description: e.description, amount_cents: e.amount_cents, paid_by: e.paid_by, category: e.category, spent_on: d, owed }, userId)
+      await addExpense(group, { description: e.description, amount_cents: e.amount_cents, paid_by: e.paid_by, category: e.category, spent_on: d, owed, extra },
+        userId, `${base}-${d.slice(2).replace(/-/g, '')}`)
       made++
     }
+    await databases.updateDocument(DB, C.expenses, e.id, { next_on: nextDate(dates[dates.length - 1], e.repeat) })
   }
   return made
 }
@@ -308,8 +344,8 @@ export async function addSettlement(group, { from_member, to_member, amount_cent
 
 /* ---------- messages ---------- */
 export async function listMessages(groupId) {
-  const r = await databases.listDocuments(DB, C.messages, [Query.equal('group_id', groupId), Query.orderAsc('$createdAt'), Query.limit(200)])
-  return r.documents.map(norm)
+  const r = await databases.listDocuments(DB, C.messages, [Query.equal('group_id', groupId), Query.orderDesc('$createdAt'), Query.limit(200)])
+  return r.documents.map(norm).reverse()
 }
 export async function sendMessage(group, userId, displayName, body) {
   await databases.createDocument(DB, C.messages, ID.unique(),
@@ -324,8 +360,8 @@ export function subscribeMessages(groupId, onNew) {
 
 /* ---------- comments ---------- */
 export async function listComments(expenseId) {
-  const r = await databases.listDocuments(DB, C.comments, [Query.equal('expense_id', expenseId), Query.orderAsc('$createdAt'), Query.limit(200)])
-  return r.documents.map(norm)
+  const r = await databases.listDocuments(DB, C.comments, [Query.equal('expense_id', expenseId), Query.orderDesc('$createdAt'), Query.limit(200)])
+  return r.documents.map(norm).reverse()
 }
 export async function addComment(group, expenseId, userId, displayName, body) {
   await databases.createDocument(DB, C.comments, ID.unique(),
@@ -356,7 +392,8 @@ export async function settleAll(person, me) {
     if (!a) continue
     const [from_member, to_member] = part.amount > 0 ? [person.user_id, me.id] : [me.id, person.user_id]
     await addSettlement(part.group, { from_member, to_member, amount_cents: a })
-    logActivity(part.group, me.name, `${part.amount > 0 ? person.name : me.name} paid ${part.amount > 0 ? me.name : person.name} ${person.cur}${(a / 100).toFixed(2)} (settled all across groups)`)
+    logActivity(part.group, me.name, `${part.amount > 0 ? person.name : me.name} paid ${part.amount > 0 ? me.name : person.name} ${money(a, person.cur)} (settled all across groups)`)
+    part.amount = 0 // recorded: skipped if the person retries
   }
 }
 
@@ -421,8 +458,8 @@ export async function disablePush() {
 // Your share of every expense you're in, across all groups (see myShares).
 async function _listMySpending(userId) {
   const [sp, ex] = await Promise.all([
-    databases.listDocuments(DB, C.splits, [Query.equal('member_id', userId), Query.limit(5000)]),
-    databases.listDocuments(DB, C.expenses, [Query.limit(5000)]),
+    listAll(C.splits, [Query.equal('member_id', userId)]),
+    listAll(C.expenses),
   ])
   return myShares(userId, ex.documents.map(norm), sp.documents)
 }
@@ -464,10 +501,13 @@ const readOutbox = () => { try { return JSON.parse(localStorage.getItem(OUTBOX) 
 const writeOutbox = q => { localStorage.setItem(OUTBOX, JSON.stringify(q)); window.dispatchEvent(new Event('splitit-outbox')) }
 export const pendingFor = groupId => readOutbox().filter(x => !groupId || x.group.id === groupId)
 export async function addExpenseOrQueue(group, payload, userId, actorName) {
+  const id = ID.unique()
   if (navigator.onLine) {
-    try { return await addExpense(group, payload, userId) } catch (e) { if (!isNetErr(e)) throw e }
+    try { return await addExpense(group, payload, userId, id) } catch (e) {
+      if (!isNetErr(e)) { await deleteExpense(id).catch(() => {}); throw e } // don't leave a half-split expense behind
+    }
   }
-  writeOutbox([...readOutbox(), { key: 'q' + Date.now(), group: { id: group.id, team_id: group.team_id }, payload, userId, actorName }])
+  writeOutbox([...readOutbox(), { key: 'q' + Date.now(), id, group: { id: group.id, team_id: group.team_id }, payload, userId, actorName }])
   return 'queued'
 }
 let flushing = false
@@ -478,10 +518,14 @@ export async function flushOutbox() {
   try {
     for (const item of readOutbox()) {
       try {
-        await addExpense(item.group, item.payload, item.userId)
+        await addExpense(item.group, item.payload, item.userId, item.id)
         logActivity(item.group, item.actorName || 'Someone', `added “${item.payload.description}” (synced)`)
         writeOutbox(readOutbox().filter(x => x.key !== item.key)); done++
-      } catch (e) { if (isNetErr(e)) break; writeOutbox(readOutbox().filter(x => x.key !== item.key)) } // drop items the server rejects
+      } catch (e) {
+        if (isNetErr(e)) break
+        // drop only what can never succeed; an expired session or a busy server keeps it for later
+        if (e.code === 400 || e.code === 404) writeOutbox(readOutbox().filter(x => x.key !== item.key))
+      }
     }
   } finally { flushing = false }
   if (done) window.dispatchEvent(new Event('splitit-synced'))
